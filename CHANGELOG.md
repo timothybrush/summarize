@@ -9,6 +9,7 @@
 
 ### Fixes
 
+- Typecheck: include `packages/core` in the root typecheck script so core library errors fail the gate.
 - Tests: ignore invalid `VITEST_MAX_THREADS` overrides so Vitest never receives `maxThreads` below `minThreads`.
 - CLI version: stop baking a stale git SHA into the committed `dist/cli.js` wrapper so checkout builds report the current commit.
 - Chrome extension: keep local-video slide E2E shutdown from hanging, reject malformed media durations and non-video YouTube container URLs, and sanitize invalid advanced settings before they reach daemon requests.

@@ -55,7 +55,7 @@
     "test:coverage": "vitest run --coverage",
     "test:coverage:build": "pnpm build && pnpm test:coverage",
     "test:extension-e2e": "pnpm -C apps/chrome-extension test:e2e",
-    "typecheck": "tsgo -p tsconfig.build.json --noEmit"
+    "typecheck": "pnpm -C packages/core typecheck && tsgo -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.73.0",
