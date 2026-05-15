@@ -9,6 +9,7 @@
 
 ### Fixes
 
+- Test gates: wire `VITEST_MAX_THREADS` through Vitest 4 `maxWorkers` and add package bin/script regression coverage.
 - Dependencies: update workspace packages and replace deprecated `@mariozechner/pi-ai` with `@earendil-works/pi-ai`.
 - CLI performance: add opt-in startup/first-output tracing and avoid network LiteLLM catalog refreshes on fixed-model summary streaming and finish-line cost estimation.
 - Chrome extension slides: harden slide payload loading against malformed cache/stream data and clear stale thumbnails before retrying updated slide images.
