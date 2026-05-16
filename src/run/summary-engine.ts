@@ -404,6 +404,61 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
     let getLastStreamError: (() => unknown) | null = null;
 
     let streamResult: Awaited<ReturnType<typeof streamTextWithModelId>> | null = null;
+    const summarizeWithoutStreaming = async () => {
+      const result = await summarizeWithModelId({
+        modelId: parsedModelEffective.canonical,
+        prompt,
+        maxOutputTokens: maxOutputTokensForCall ?? undefined,
+        timeoutMs: deps.timeoutMs,
+        fetchImpl: deps.trackedFetch,
+        apiKeys: apiKeysForLlm,
+        forceOpenRouter: attempt.forceOpenRouter,
+        openaiBaseUrlOverride: attempt.openaiBaseUrlOverride ?? deps.providerBaseUrls.openai,
+        anthropicBaseUrlOverride: deps.providerBaseUrls.anthropic,
+        googleBaseUrlOverride: deps.providerBaseUrls.google,
+        xaiBaseUrlOverride: deps.providerBaseUrls.xai,
+        zaiBaseUrlOverride: deps.zai.baseUrl,
+        forceChatCompletions,
+        requestOptions,
+        retries: deps.retries,
+        onRetry: createRetryLogger({
+          stderr: deps.stderr,
+          verbose: deps.verbose,
+          color: deps.verboseColor,
+          modelId: parsedModelEffective.canonical,
+          env: deps.envForRun,
+        }),
+      });
+      deps.llmCalls.push({
+        provider: result.provider,
+        model: result.canonicalModelId,
+        usage: result.usage,
+        purpose: "summary",
+      });
+      return result.text;
+    };
+    const canFallbackFromStreamError = (error: unknown): boolean =>
+      isStreamingTimeoutError(error) ||
+      (parsedModelEffective.provider === "google" && isGoogleStreamingUnsupportedError(error));
+    const writeStreamFallbackNotice = (error: unknown) => {
+      if (isStreamingTimeoutError(error)) {
+        writeVerbose(
+          deps.stderr,
+          deps.verbose,
+          `Streaming timed out for ${parsedModelEffective.canonical}; falling back to non-streaming.`,
+          deps.verboseColor,
+          deps.envForRun,
+        );
+        return;
+      }
+      writeVerbose(
+        deps.stderr,
+        deps.verbose,
+        `Google model ${parsedModelEffective.canonical} rejected streamGenerateContent; falling back to non-streaming.`,
+        deps.verboseColor,
+        deps.envForRun,
+      );
+    };
     try {
       deps.perfTrace?.mark("summary:stream-open");
       streamResult = await streamTextWithModelId({
@@ -423,86 +478,9 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
         fetchImpl: deps.trackedFetch,
       });
     } catch (error) {
-      if (isStreamingTimeoutError(error)) {
-        writeVerbose(
-          deps.stderr,
-          deps.verbose,
-          `Streaming timed out for ${parsedModelEffective.canonical}; falling back to non-streaming.`,
-          deps.verboseColor,
-          deps.envForRun,
-        );
-        const result = await summarizeWithModelId({
-          modelId: parsedModelEffective.canonical,
-          prompt,
-          maxOutputTokens: maxOutputTokensForCall ?? undefined,
-          timeoutMs: deps.timeoutMs,
-          fetchImpl: deps.trackedFetch,
-          apiKeys: apiKeysForLlm,
-          forceOpenRouter: attempt.forceOpenRouter,
-          openaiBaseUrlOverride: attempt.openaiBaseUrlOverride ?? deps.providerBaseUrls.openai,
-          anthropicBaseUrlOverride: deps.providerBaseUrls.anthropic,
-          googleBaseUrlOverride: deps.providerBaseUrls.google,
-          xaiBaseUrlOverride: deps.providerBaseUrls.xai,
-          zaiBaseUrlOverride: deps.zai.baseUrl,
-          forceChatCompletions,
-          requestOptions,
-          retries: deps.retries,
-          onRetry: createRetryLogger({
-            stderr: deps.stderr,
-            verbose: deps.verbose,
-            color: deps.verboseColor,
-            modelId: parsedModelEffective.canonical,
-            env: deps.envForRun,
-          }),
-        });
-        deps.llmCalls.push({
-          provider: result.provider,
-          model: result.canonicalModelId,
-          usage: result.usage,
-          purpose: "summary",
-        });
-        summary = result.text;
-        streamResult = null;
-      } else if (
-        parsedModelEffective.provider === "google" &&
-        isGoogleStreamingUnsupportedError(error)
-      ) {
-        writeVerbose(
-          deps.stderr,
-          deps.verbose,
-          `Google model ${parsedModelEffective.canonical} rejected streamGenerateContent; falling back to non-streaming.`,
-          deps.verboseColor,
-          deps.envForRun,
-        );
-        const result = await summarizeWithModelId({
-          modelId: parsedModelEffective.canonical,
-          prompt,
-          maxOutputTokens: maxOutputTokensForCall ?? undefined,
-          timeoutMs: deps.timeoutMs,
-          fetchImpl: deps.trackedFetch,
-          apiKeys: apiKeysForLlm,
-          forceOpenRouter: attempt.forceOpenRouter,
-          openaiBaseUrlOverride: attempt.openaiBaseUrlOverride ?? deps.providerBaseUrls.openai,
-          anthropicBaseUrlOverride: deps.providerBaseUrls.anthropic,
-          googleBaseUrlOverride: deps.providerBaseUrls.google,
-          xaiBaseUrlOverride: deps.providerBaseUrls.xai,
-          zaiBaseUrlOverride: deps.zai.baseUrl,
-          retries: deps.retries,
-          onRetry: createRetryLogger({
-            stderr: deps.stderr,
-            verbose: deps.verbose,
-            color: deps.verboseColor,
-            modelId: parsedModelEffective.canonical,
-            env: deps.envForRun,
-          }),
-        });
-        deps.llmCalls.push({
-          provider: result.provider,
-          model: result.canonicalModelId,
-          usage: result.usage,
-          purpose: "summary",
-        });
-        summary = result.text;
+      if (canFallbackFromStreamError(error)) {
+        writeStreamFallbackNotice(error);
+        summary = await summarizeWithoutStreaming();
         streamResult = null;
       } else {
         throw error;
@@ -515,6 +493,7 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
       getLastStreamError = streamResult.lastError;
       let streamed = "";
       let streamedRaw = "";
+      let streamCompleted = false;
       const liveWidth = markdownRenderWidth(deps.stdout, deps.env);
       let wroteLeadingBlankLine = false;
 
@@ -582,11 +561,21 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
         streamedRaw = streamed;
         const trimmed = streamed.trim();
         streamed = trimmed;
+        streamCompleted = true;
+      } catch (error) {
+        const noVisibleStreamOutput = streamed.trim().length === 0;
+        if (canFallbackFromStreamError(error) && noVisibleStreamOutput) {
+          writeStreamFallbackNotice(error);
+          summary = await summarizeWithoutStreaming();
+          streamResult = null;
+        } else {
+          throw error;
+        }
       } finally {
-        if (streamHandler) {
+        if (streamCompleted && streamHandler) {
           await streamHandler.onDone?.(streamedRaw || streamed);
           summaryAlreadyPrinted = true;
-        } else if (shouldStreamRenderedMarkdownToStdout) {
+        } else if (streamCompleted && shouldStreamRenderedMarkdownToStdout) {
           const out = streamer?.finish();
           if (out) {
             deps.clearProgressForStdout();
@@ -601,18 +590,20 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
           summaryAlreadyPrinted = true;
         }
       }
-      const usage = await streamResult.usage;
-      deps.llmCalls.push({
-        provider: streamResult.provider,
-        model: streamResult.canonicalModelId,
-        usage,
-        purpose: "summary",
-      });
-      summary = streamed;
-      if (shouldStreamSummaryToStdout) {
-        const finalText = streamedRaw || streamed;
-        outputGate?.finalize(finalText);
-        summaryAlreadyPrinted = true;
+      if (streamResult) {
+        const usage = await streamResult.usage;
+        deps.llmCalls.push({
+          provider: streamResult.provider,
+          model: streamResult.canonicalModelId,
+          usage,
+          purpose: "summary",
+        });
+        summary = streamed;
+        if (shouldStreamSummaryToStdout) {
+          const finalText = streamedRaw || streamed;
+          outputGate?.finalize(finalText);
+          summaryAlreadyPrinted = true;
+        }
       }
     }
 
