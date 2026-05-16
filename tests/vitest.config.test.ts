@@ -35,4 +35,11 @@ describe("vitest config", () => {
       "html",
     ]);
   });
+
+  it("collects coverage from CLI and core package sources", () => {
+    expect(createVitestConfig({ env: {} }).test?.coverage?.include).toEqual([
+      "src/**/*.ts",
+      "packages/core/src/**/*.ts",
+    ]);
+  });
 });
