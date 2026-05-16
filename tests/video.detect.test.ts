@@ -21,6 +21,14 @@ describe("detectPrimaryVideoFromHtml", () => {
     });
   });
 
+  it("accepts privacy-enhanced YouTube embeds", () => {
+    const html = `<iframe src="https://www.youtube-nocookie.com/embed/${YT_ID}"></iframe>`;
+    expect(detectPrimaryVideoFromHtml(html, BASE_URL)).toEqual({
+      kind: "youtube",
+      url: `https://www.youtube.com/watch?v=${YT_ID}`,
+    });
+  });
+
   it("skips invalid iframe src and falls back to OpenGraph", () => {
     const html = `<iframe src="http://[invalid"></iframe>
       <meta property="og:video" content="https://cdn.example.com/video.mp4">`;
@@ -40,6 +48,14 @@ describe("detectPrimaryVideoFromHtml", () => {
 
   it("accepts OpenGraph YouTube embeds", () => {
     const html = `<meta property="og:video:url" content="https://www.youtube.com/embed/${YT_ID}">`;
+    expect(detectPrimaryVideoFromHtml(html, BASE_URL)).toEqual({
+      kind: "youtube",
+      url: `https://www.youtube.com/watch?v=${YT_ID}`,
+    });
+  });
+
+  it("accepts OpenGraph privacy-enhanced YouTube embeds", () => {
+    const html = `<meta property="og:video:url" content="https://www.youtube-nocookie.com/embed/${YT_ID}">`;
     expect(detectPrimaryVideoFromHtml(html, BASE_URL)).toEqual({
       kind: "youtube",
       url: `https://www.youtube.com/watch?v=${YT_ID}`,
@@ -69,6 +85,18 @@ describe("detectPrimaryVideoFromHtml", () => {
       kind: "direct",
       url: "https://example.com/assets/movie.m4v",
     });
+  });
+
+  it("rejects unsafe direct video URL schemes", () => {
+    for (const value of [
+      "javascript:alert(1).mp4",
+      "data:text/plain,hello.mp4",
+      "file:///tmp/video.mp4",
+      "ftp://cdn.example.com/video.mp4",
+    ]) {
+      const html = `<meta property="og:video" content="${value}">`;
+      expect(detectPrimaryVideoFromHtml(html, BASE_URL)).toBeNull();
+    }
   });
 
   it("returns null for invalid YouTube embed ids", () => {

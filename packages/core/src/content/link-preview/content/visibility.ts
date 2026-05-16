@@ -1,9 +1,12 @@
 import { load } from "cheerio";
 
 const COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+const CSS_COMMENT_PATTERN = /\/\*[\s\S]*?\*\//g;
 const STYLE_SPLIT_PATTERN = /;/;
 
-type StyleMap = Record<string, string>;
+type AttributeMap = Record<string, string>;
+type StyleDeclaration = { value: string; important: boolean };
+type StyleMap = Record<string, StyleDeclaration>;
 
 function parseStyle(style: string): StyleMap {
   const map: StyleMap = {};
@@ -13,12 +16,18 @@ function parseStyle(style: string): StyleMap {
     const colon = trimmed.indexOf(":");
     if (colon === -1) continue;
     const key = trimmed.slice(0, colon).trim().toLowerCase();
-    const value = trimmed
+    const rawValue = trimmed
       .slice(colon + 1)
       .trim()
       .toLowerCase();
+    const important = /!\s*important\b/.test(rawValue);
+    const value = rawValue.replace(/!\s*important\b/g, "").trim();
     if (!key) continue;
-    map[key] = value;
+    if (!value) continue;
+    const current = map[key];
+    if (!current || important || !current.important) {
+      map[key] = { value, important };
+    }
   }
   return map;
 }
@@ -31,12 +40,17 @@ function parseCssNumber(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function cssKeyword(declaration: StyleDeclaration | undefined): string {
+  return (declaration?.value ?? "").trim().split(/\s+/)[0];
+}
+
 function isHiddenByStyle(style: string): boolean {
-  const normalized = style.toLowerCase();
-  if (/display\s*:\s*none/.test(normalized)) return true;
-  if (/visibility\s*:\s*hidden/.test(normalized)) return true;
-  if (/opacity\s*:\s*0(?:\.0+)?(?:\s|;|$)/.test(normalized)) return true;
-  if (/font-size\s*:\s*0(?:\.0+)?(?:[a-z%]+)?/.test(normalized)) return true;
+  const normalized = style.toLowerCase().replace(CSS_COMMENT_PATTERN, "");
+  const styles = parseStyle(normalized);
+  if (cssKeyword(styles.display) === "none") return true;
+  if (cssKeyword(styles.visibility) === "hidden") return true;
+  if (parseCssNumber(styles.opacity?.value) === 0) return true;
+  if (parseCssNumber(styles["font-size"]?.value) === 0) return true;
   if (/clip-path\s*:\s*inset\(\s*100%/i.test(normalized)) return true;
   if (
     /clip\s*:\s*rect\(\s*0(?:px)?\s*,\s*0(?:px)?\s*,\s*0(?:px)?\s*,\s*0(?:px)?\s*\)/i.test(
@@ -47,19 +61,18 @@ function isHiddenByStyle(style: string): boolean {
   }
   if (/transform\s*:\s*scale\(\s*0(?:\s*,\s*0)?\s*\)/i.test(normalized)) return true;
 
-  const styles = parseStyle(normalized);
-  const width = parseCssNumber(styles.width);
-  const height = parseCssNumber(styles.height);
-  const overflow = styles.overflow ?? "";
+  const width = parseCssNumber(styles.width?.value);
+  const height = parseCssNumber(styles.height?.value);
+  const overflow = styles.overflow?.value ?? "";
   if (width === 0 && height === 0 && overflow.startsWith("hidden")) return true;
 
-  const textIndent = parseCssNumber(styles["text-indent"]);
+  const textIndent = parseCssNumber(styles["text-indent"]?.value);
   if (textIndent !== null && textIndent <= -999) return true;
 
-  const position = styles.position;
+  const position = cssKeyword(styles.position);
   if (position === "absolute" || position === "fixed") {
-    const left = parseCssNumber(styles.left);
-    const top = parseCssNumber(styles.top);
+    const left = parseCssNumber(styles.left?.value);
+    const top = parseCssNumber(styles.top?.value);
     if (left !== null && left <= -999) return true;
     if (top !== null && top <= -999) return true;
   }
@@ -70,7 +83,7 @@ function isHiddenByStyle(style: string): boolean {
 function shouldStripElement(
   tagName: string,
   style: string | undefined,
-  attributes: StyleMap,
+  attributes: AttributeMap,
 ): boolean {
   if (tagName === "template") return true;
   if (tagName === "script") return true;
@@ -103,7 +116,7 @@ export function stripHiddenHtml(html: string): string {
     if (!("tagName" in element) || typeof element.tagName !== "string") return;
     const tagName = element.tagName.toLowerCase();
     const attribs = "attribs" in element && element.attribs ? element.attribs : {};
-    const attributes: StyleMap = {};
+    const attributes: AttributeMap = {};
     for (const [key, value] of Object.entries(attribs)) {
       attributes[key.toLowerCase()] = value?.toLowerCase?.() ?? "";
     }

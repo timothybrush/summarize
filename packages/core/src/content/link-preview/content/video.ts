@@ -20,6 +20,7 @@ function resolveAbsoluteUrl(candidate: string, baseUrl: string): string | null {
 function isDirectVideoUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
     const lower = parsed.pathname.toLowerCase();
     for (const ext of VIDEO_EXTENSIONS) {
       if (lower.endsWith(ext)) return true;
@@ -34,7 +35,12 @@ function extractYouTubeVideoIdFromEmbedUrl(raw: string): string | null {
   try {
     const u = new URL(raw);
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
-    if (host === "youtube.com" || host.endsWith(".youtube.com")) {
+    if (
+      host === "youtube.com" ||
+      host.endsWith(".youtube.com") ||
+      host === "youtube-nocookie.com" ||
+      host.endsWith(".youtube-nocookie.com")
+    ) {
       const m = u.pathname.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
       return m?.[1] ?? null;
     }
@@ -66,7 +72,11 @@ export function detectPrimaryVideoFromHtml(html: string, url: string): DetectedV
 
   // 1) YouTube embeds (preferred, stable)
   const iframeSrc =
-    $('iframe[src*="youtube.com/embed/"], iframe[src*="youtu.be/"]').first().attr("src") ?? null;
+    $(
+      'iframe[src*="youtube.com/embed/"], iframe[src*="youtube-nocookie.com/embed/"], iframe[src*="youtu.be/"]',
+    )
+      .first()
+      .attr("src") ?? null;
   if (iframeSrc) {
     const resolved = resolveAbsoluteUrl(iframeSrc, url);
     const videoId = resolved ? extractYouTubeVideoIdFromEmbedUrl(resolved) : null;
