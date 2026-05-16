@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixes
+
+- CLI streaming: fall back to non-streaming summaries when a stream iterator times out before yielding text, without marking slide streaming complete on failed partial output.
+- Core prompts: escape untrusted prompt context/content delimiters and make sponsor-only slide instructions compatible with mandatory slide headings.
+- Link preview: reject unsafe direct-video URL schemes, detect YouTube privacy-enhanced embeds, and avoid stripping visible inline text with similar CSS property/value prefixes.
+- Slides: reject traversal and symlinked cache image paths while preserving valid child paths that start with dot-dot text.
+- Chrome extension: flush final SSE events when streams close without a blank delimiter.
+- Tests: include `packages/core/src` in coverage collection so core package regressions affect the gate.
+
 ## 0.15.1 - 2026-05-15
 
 ### Fixes
