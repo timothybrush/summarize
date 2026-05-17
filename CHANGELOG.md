@@ -9,6 +9,7 @@
 - Chrome extension: allow max-size page extraction payloads to reach the daemon instead of failing JSON body parsing before summarization starts.
 - CLI streaming: write interactive raw summary deltas as soon as they arrive instead of waiting for a newline before the first stdout output.
 - Chrome extension automation: avoid duplicate content-script listeners when automation is injected more than once into the same tab.
+- Chrome extension options: keep slower process-log responses from overwriting the logs for a newly selected process.
 
 ## 0.15.2 - 2026-05-17
 
