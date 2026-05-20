@@ -51,6 +51,7 @@ describe("summary view runtime", () => {
       renderEl,
       renderSlidesHostEl,
       renderMarkdownHostEl,
+      summaryCopyBtn: document.createElement("button"),
       getSlidesRenderer: () => ({ clear: vi.fn() }),
       metricsController: { clearForMode: vi.fn() },
       headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
@@ -122,6 +123,7 @@ describe("summary view runtime", () => {
       renderEl: document.createElement("div"),
       renderSlidesHostEl: document.createElement("div"),
       renderMarkdownHostEl: document.createElement("div"),
+      summaryCopyBtn: document.createElement("button"),
       getSlidesRenderer: () => ({ clear: vi.fn() }),
       metricsController: { clearForMode: vi.fn() },
       headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
@@ -184,5 +186,67 @@ describe("summary view runtime", () => {
 
     expect(setSlidesContextUrl).toHaveBeenCalledWith(null);
     expect(requestSlidesContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the persistent header copy action when resetting the summary view", () => {
+    const panelState = createPanelState();
+    const summaryCopyBtn = document.createElement("button");
+    summaryCopyBtn.className = "summaryCopy";
+    summaryCopyBtn.disabled = false;
+    summaryCopyBtn.onclick = vi.fn();
+
+    const runtime = createSummaryViewRuntime({
+      panelState,
+      renderEl: document.createElement("div"),
+      renderSlidesHostEl: document.createElement("div"),
+      renderMarkdownHostEl: document.createElement("div"),
+      summaryCopyBtn,
+      getSlidesRenderer: () => ({ clear: vi.fn() }),
+      metricsController: { clearForMode: vi.fn() },
+      headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
+      slidesTextController: {
+        reset: vi.fn(),
+        getTranscriptTimedText: vi.fn(() => null),
+        getTranscriptAvailable: vi.fn(() => false),
+      },
+      getSlidesHydrator: () => ({ syncFromCache: vi.fn() }),
+      stopSlidesStream: vi.fn(),
+      refreshSummarizeControl: vi.fn(),
+      resetChatState: vi.fn(),
+      setSlidesTranscriptTimedText: vi.fn(),
+      getSlidesParallelValue: vi.fn(() => true),
+      getCurrentRunTabId: vi.fn(() => null),
+      getActiveTabId: vi.fn(() => 1),
+      getActiveTabUrl: vi.fn(() => "https://example.com/watch?v=abc123"),
+      setCurrentRunTabId: vi.fn(),
+      setSlidesContextPending: vi.fn(),
+      setSlidesContextUrl: vi.fn(),
+      setSlidesSeededSourceId: vi.fn(),
+      setSlidesAppliedRunId: vi.fn(),
+      setSlidesExpanded: vi.fn(),
+      resolveActiveSlidesRunId: vi.fn(() => null),
+      getSlidesSummaryState: vi.fn(() => ({
+        runId: null,
+        markdown: "",
+        complete: false,
+        model: null,
+      })),
+      setSlidesSummaryState: vi.fn(),
+      clearSlidesSummaryPending: vi.fn(),
+      clearSlidesSummaryError: vi.fn(),
+      updateSlidesTextState: vi.fn(),
+      requestSlidesContext: vi.fn(),
+      updateSlideSummaryFromMarkdown: vi.fn(),
+      renderMarkdown: vi.fn(),
+      renderMarkdownDisplay: vi.fn(),
+      queueSlidesRender: vi.fn(),
+      setPhase: vi.fn(),
+    });
+
+    runtime.resetSummaryView();
+
+    expect(summaryCopyBtn.classList.contains("hidden")).toBe(true);
+    expect(summaryCopyBtn.disabled).toBe(true);
+    expect(summaryCopyBtn.onclick).toBeNull();
   });
 });
