@@ -3,18 +3,99 @@ import type { ExtractedLinkContent } from "../../../content/index.js";
 import {
   extractSlidesForSource,
   resolveSlideSource,
+  resolveSlidesDir,
   type SlideExtractionResult,
+  type SlideSettings,
   validateSlidesCache,
 } from "../../../slides/index.js";
+import { buildIntervalTimestamps } from "../../../slides/scene-detection.js";
 import { writeVerbose } from "../../logging.js";
 import { resolveUrlFlowYtDlpPath } from "./external-media.js";
 import { createSlidesTerminalOutput, type SlidesTerminalOutput } from "./slides-output.js";
+import { parseTranscriptTimedText } from "./slides-text.js";
 import { composeUrlFlowHooks, type UrlFlowContext } from "./types.js";
 
 type ProgressStatusLike = {
   clearSlides: () => void;
   setSlides: (text: string, percent?: number | null) => void;
 };
+
+function resolvePlannedTimelineDurationSeconds(extracted: ExtractedLinkContent): number | null {
+  const exact =
+    typeof extracted.mediaDurationSeconds === "number" &&
+    Number.isFinite(extracted.mediaDurationSeconds) &&
+    extracted.mediaDurationSeconds > 0
+      ? extracted.mediaDurationSeconds
+      : null;
+  if (exact != null) return exact;
+
+  const segmentEnds = (extracted.transcriptSegments ?? [])
+    .map((segment) => {
+      const endMs =
+        typeof segment.endMs === "number" && Number.isFinite(segment.endMs)
+          ? segment.endMs
+          : segment.startMs;
+      return typeof endMs === "number" && Number.isFinite(endMs) ? endMs / 1000 : null;
+    })
+    .filter((value): value is number => value != null && value > 0);
+  const segmentDuration = segmentEnds.length > 0 ? Math.max(...segmentEnds) : null;
+  if (segmentDuration != null && Number.isFinite(segmentDuration) && segmentDuration > 0) {
+    return segmentDuration;
+  }
+
+  const timedSegments = parseTranscriptTimedText(extracted.transcriptTimedText);
+  const lastTimedSegment = timedSegments.at(-1);
+  if (lastTimedSegment && Number.isFinite(lastTimedSegment.startSeconds)) {
+    return lastTimedSegment.startSeconds;
+  }
+
+  return null;
+}
+
+function buildPlannedSlidesTimeline({
+  url,
+  extracted,
+  settings,
+}: {
+  url: string;
+  extracted: ExtractedLinkContent;
+  settings: SlideSettings;
+}): SlideExtractionResult | null {
+  const source = resolveSlideSource({ url, extracted });
+  if (!source) return null;
+  const durationSeconds = resolvePlannedTimelineDurationSeconds(extracted);
+  const interval = buildIntervalTimestamps({
+    durationSeconds,
+    minDurationSeconds: settings.minDurationSeconds,
+    maxSlides: settings.maxSlides,
+  });
+  if (!interval || interval.timestamps.length === 0) return null;
+
+  return {
+    sourceUrl: source.url,
+    sourceKind: source.kind,
+    sourceId: source.sourceId,
+    slidesDir: resolveSlidesDir(settings.outputDir, source.sourceId),
+    sceneThreshold: settings.sceneThreshold,
+    autoTuneThreshold: settings.autoTuneThreshold,
+    autoTune: {
+      enabled: false,
+      chosenThreshold: settings.sceneThreshold,
+      confidence: 0,
+      strategy: "none",
+    },
+    maxSlides: settings.maxSlides,
+    minSlideDuration: settings.minDurationSeconds,
+    ocrRequested: settings.ocr,
+    ocrAvailable: false,
+    slides: interval.timestamps.map((timestamp, index) => ({
+      index: index + 1,
+      timestamp,
+      imagePath: "",
+    })),
+    warnings: [],
+  };
+}
 
 export type UrlSlidesSession = {
   getSlidesExtracted: () => SlideExtractionResult | null;
@@ -101,6 +182,17 @@ export function createUrlSlidesSession({
     progressStatus.clearSlides();
     sessionHooks.onSlidesDone?.(result);
   };
+
+  const emitPlannedSlidesTimeline = () => {
+    if (!flags.slides || slidesTimelineResolved) return null;
+    const planned = buildPlannedSlidesTimeline({ url, extracted, settings: flags.slides });
+    if (!planned) return null;
+    resolveTimeline(planned);
+    sessionHooks.onSlidesExtracted?.(planned);
+    return planned;
+  };
+
+  emitPlannedSlidesTimeline();
 
   const runSlidesExtraction = async (): Promise<SlideExtractionResult | null> => {
     if (!flags.slides) return null;
@@ -227,6 +319,7 @@ export function createUrlSlidesSession({
     slidesTimelinePromise,
     setExtracted: (value) => {
       extracted = value;
+      emitPlannedSlidesTimeline();
     },
   };
 }

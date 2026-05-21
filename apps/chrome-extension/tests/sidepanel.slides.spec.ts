@@ -109,6 +109,240 @@ test("sidepanel replaces placeholder slides with the final smaller payload", asy
   }
 });
 
+test("sidepanel shows planned slide placeholders before daemon slides arrive", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const harness = await launchExtension(getBrowserFromProject(testInfo.project.name));
+
+  try {
+    await seedSettings(harness, {
+      token: "test-token",
+      autoSummarize: false,
+      slidesEnabled: true,
+      slidesParallel: true,
+      slidesOcrEnabled: true,
+    });
+    const page = await openExtensionPage(harness, "sidepanel.html", "#title");
+    await waitForPanelPort(page);
+    await waitForSettingsHydratedHook(page);
+    await waitForSlidesRuntimeHooks(page);
+
+    await page.route("http://127.0.0.1:8787/v1/summarize/planned-run/events", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: [
+          "event: status",
+          `data: ${JSON.stringify({ text: "Slides: downloading video 8%" })}`,
+          "",
+          "event: chunk",
+          `data: ${JSON.stringify({ text: "Transcript summary arrives before slide images." })}`,
+          "",
+          "event: done",
+          "data: {}",
+          "",
+        ].join("\n"),
+      });
+    });
+    await page.route("http://127.0.0.1:8787/v1/summarize/planned-run/slides", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ok: false, error: "not ready" }),
+      });
+    });
+    await page.route(
+      "http://127.0.0.1:8787/v1/summarize/planned-run/slides/events",
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: [
+            "event: status",
+            `data: ${JSON.stringify({ text: "Slides: downloading video 8%" })}`,
+            "",
+            "event: done",
+            "data: {}",
+            "",
+          ].join("\n"),
+        });
+      },
+    );
+
+    const targetUrl = "https://www.youtube.com/watch?v=planned123";
+    await sendBgMessage(harness, {
+      type: "ui:state",
+      state: buildUiState({
+        tab: { id: 1, url: targetUrl, title: "Planned Video" },
+        media: { hasVideo: true, hasAudio: true, hasCaptions: true },
+        stats: { pageWords: 0, videoDurationSeconds: null },
+        settings: {
+          autoSummarize: false,
+          slidesEnabled: true,
+          slidesParallel: true,
+          slidesOcrEnabled: true,
+          tokenPresent: true,
+        },
+      }),
+    });
+    await sendBgMessage(harness, {
+      type: "run:start",
+      run: {
+        id: "planned-run",
+        url: targetUrl,
+        title: "Planned Video",
+        model: "auto",
+        reason: "manual",
+        slides: true,
+      },
+    });
+
+    await expect.poll(async () => (await getPanelSlidesTimeline(page)).length).toBe(6);
+    await expect(page.locator(".renderEmpty")).toHaveCount(0);
+    await expect(page.locator(".slideGallery__item")).toHaveCount(6);
+    await expect(page.locator("#render")).not.toContainText("Preparing summary");
+
+    const durationState = buildUiState({
+      tab: { id: 1, url: targetUrl, title: "Planned Video" },
+      media: { hasVideo: true, hasAudio: true, hasCaptions: true },
+      stats: { pageWords: 0, videoDurationSeconds: 1200 },
+      settings: {
+        autoSummarize: false,
+        slidesEnabled: true,
+        slidesParallel: true,
+        slidesOcrEnabled: true,
+        tokenPresent: true,
+      },
+    });
+    await sendBgMessage(harness, {
+      type: "ui:state",
+      state: durationState,
+    });
+
+    await expect
+      .poll(async () => {
+        const timeline = await getPanelSlidesTimeline(page);
+        return {
+          count: timeline.length,
+          finiteTimestamps: timeline.filter((slide) => slide.timestamp !== null).length,
+        };
+      })
+      .toEqual({ count: 7, finiteTimestamps: 7 });
+
+    assertNoErrors(harness);
+  } finally {
+    await closeExtension(harness.context, harness.userDataDir);
+  }
+});
+
+test("sidepanel does not reseed planned slides over resolved direct video slides", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const harness = await launchExtension(getBrowserFromProject(testInfo.project.name));
+
+  try {
+    await seedSettings(harness, {
+      token: "test-token",
+      autoSummarize: false,
+      slidesEnabled: true,
+      slidesParallel: true,
+      slidesOcrEnabled: true,
+    });
+    const page = await openExtensionPage(harness, "sidepanel.html", "#title");
+    await waitForPanelPort(page);
+    await waitForSettingsHydratedHook(page);
+    await waitForSlidesRuntimeHooks(page);
+
+    await page.route("http://127.0.0.1:8787/v1/summarize/direct-run/events", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: [
+          "event: status",
+          `data: ${JSON.stringify({ text: "Slides: downloading video 8%" })}`,
+          "",
+          "event: chunk",
+          `data: ${JSON.stringify({ text: "Direct video summary." })}`,
+          "",
+          "event: done",
+          "data: {}",
+          "",
+        ].join("\n"),
+      });
+    });
+    await page.route("http://127.0.0.1:8787/v1/summarize/direct-run/slides", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ok: false, error: "not ready" }),
+      });
+    });
+    await page.route(
+      "http://127.0.0.1:8787/v1/summarize/direct-run/slides/events",
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: ["event: done", "data: {}", ""].join("\n"),
+        });
+      },
+    );
+
+    const targetUrl = "https://cdn.example.com/video.mp4";
+    const stateWithoutDuration = buildUiState({
+      tab: { id: 1, url: targetUrl, title: "Direct Video" },
+      media: { hasVideo: true, hasAudio: true, hasCaptions: false },
+      stats: { pageWords: 0, videoDurationSeconds: null },
+      settings: {
+        autoSummarize: false,
+        slidesEnabled: true,
+        slidesParallel: true,
+        slidesOcrEnabled: true,
+        tokenPresent: true,
+      },
+    });
+    await sendBgMessage(harness, { type: "ui:state", state: stateWithoutDuration });
+    await sendBgMessage(harness, {
+      type: "run:start",
+      run: {
+        id: "direct-run",
+        url: targetUrl,
+        title: "Direct Video",
+        model: "auto",
+        reason: "manual",
+        slides: true,
+      },
+    });
+
+    await expect.poll(async () => (await getPanelSlidesTimeline(page)).length).toBe(6);
+    await routePlaceholderSlideImages(page);
+
+    await applySlidesPayload(page, {
+      sourceUrl: targetUrl,
+      sourceId: "cdn-example-video-deadbeef",
+      sourceKind: "direct",
+      ocrAvailable: false,
+      slides: [
+        {
+          index: 1,
+          timestamp: 12,
+          imageUrl: "http://127.0.0.1:8787/v1/slides/cdn-example-video-deadbeef/1?v=1",
+          ocrText: null,
+          ocrConfidence: null,
+        },
+      ],
+    });
+
+    await expect.poll(async () => (await getPanelSlidesTimeline(page)).length).toBe(1);
+    await sendBgMessage(harness, { type: "ui:state", state: stateWithoutDuration });
+    await expect.poll(async () => (await getPanelSlidesTimeline(page)).length).toBe(1);
+
+    assertNoErrors(harness);
+  } finally {
+    await closeExtension(harness.context, harness.userDataDir);
+  }
+});
+
 test("sidepanel shows intro before gallery cards and hides gallery heading in slide mode", async ({
   browserName: _browserName,
 }, testInfo) => {

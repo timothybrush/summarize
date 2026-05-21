@@ -17,7 +17,7 @@ export function shouldSeedPlannedSlidesForRun({
   slidesEnabled: boolean;
 }) {
   if (!slidesEnabled) return false;
-  if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return false;
+  void durationSeconds;
   if (inputMode === "video") return true;
   if (mediaAvailable) return true;
   if (media?.hasVideo || media?.hasAudio) return true;

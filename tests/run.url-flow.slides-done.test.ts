@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CacheState } from "../src/cache.js";
+import type { ExtractedLinkContent } from "../src/content/index.js";
 import { createDaemonUrlFlowContext } from "../src/daemon/flow-context.js";
+import { createUrlSlidesSession } from "../src/run/flows/url/slides-session.js";
 import { resolveSlideSettings } from "../src/slides/settings.js";
 import type { SlideExtractionResult } from "../src/slides/types.js";
 
@@ -37,6 +39,43 @@ const makeSlides = (url: string): SlideExtractionResult => ({
   warnings: [],
 });
 
+const makeExtracted = (url: string): ExtractedLinkContent => ({
+  url,
+  title: "Video",
+  description: null,
+  siteName: "YouTube",
+  content: "Transcript:\n[0:00] intro\n[3:40] ending",
+  truncated: false,
+  totalCharacters: 64,
+  wordCount: 8,
+  transcriptCharacters: 38,
+  transcriptLines: 2,
+  transcriptWordCount: 6,
+  transcriptSource: "captionTracks",
+  transcriptionProvider: null,
+  transcriptMetadata: null,
+  transcriptSegments: [
+    { startMs: 0, endMs: 3_000, text: "intro" },
+    { startMs: 220_000, endMs: 223_000, text: "ending" },
+  ],
+  transcriptTimedText: "[0:00] intro\n[3:40] ending",
+  mediaDurationSeconds: 240,
+  video: { kind: "youtube", url },
+  isVideoOnly: false,
+  diagnostics: {
+    strategy: "html",
+    firecrawl: { attempted: false, used: false, cacheMode: "bypass", cacheStatus: "unknown" },
+    markdown: { requested: false, used: false, provider: null },
+    transcript: {
+      cacheMode: "bypass",
+      cacheStatus: "unknown",
+      textProvided: true,
+      provider: "captionTracks",
+      attemptedProviders: ["captionTracks"],
+    },
+  },
+});
+
 const waitForResult = async (
   getter: () => { ok: boolean; error?: string | null } | null,
   timeoutMs = 5000,
@@ -61,6 +100,81 @@ afterEach(() => {
 });
 
 describe("runUrlFlow slides done hook", () => {
+  it("emits a planned slide timeline before video extraction resolves", async () => {
+    const root = mkdtempSync(join(tmpdir(), "summarize-planned-slides-"));
+    const url = "https://www.youtube.com/watch?v=abc123def45";
+    const slides = resolveSlideSettings({ slides: true, cwd: root });
+    expect(slides).not.toBeNull();
+    if (!slides) {
+      throw new Error("Expected slides settings to be available.");
+    }
+
+    let resolveExtraction: ((value: SlideExtractionResult) => void) | null = null;
+    extractSlidesForSource.mockImplementationOnce(
+      () =>
+        new Promise<SlideExtractionResult>((resolve) => {
+          resolveExtraction = resolve;
+        }),
+    );
+
+    const events: Array<
+      { kind: "timeline"; count: number; hasImages: boolean } | { kind: "done" }
+    > = [];
+    const ctx = createDaemonUrlFlowContext({
+      env: { HOME: root, OPENAI_API_KEY: "test" },
+      fetchImpl: globalThis.fetch.bind(globalThis),
+      cache: { mode: "bypass", store: null, ttlMs: 0, maxBytes: 0, path: null },
+      mediaCache: null,
+      modelOverride: "openai/gpt-5.2",
+      promptOverride: null,
+      lengthRaw: "short",
+      languageRaw: "auto",
+      maxExtractCharacters: null,
+      slides,
+      hooks: {
+        onSlidesExtracted: (result) => {
+          events.push({
+            kind: "timeline",
+            count: result.slides.length,
+            hasImages: result.slides.some((slide) => Boolean(slide.imagePath)),
+          });
+        },
+        onSlidesDone: () => {
+          events.push({ kind: "done" });
+        },
+      },
+      runStartedAtMs: Date.now(),
+      stdoutSink: { writeChunk: () => {} },
+    });
+
+    const session = createUrlSlidesSession({
+      ctx,
+      url,
+      extracted: makeExtracted(url),
+      cacheStore: null,
+      progressStatus: { clearSlides: () => {}, setSlides: () => {} },
+      renderStatus: (label) => label,
+      renderStatusFromText: (text) => text,
+      updateSummaryProgress: () => {},
+    });
+
+    await expect(session.slidesTimelinePromise).resolves.toMatchObject({
+      slides: expect.arrayContaining([{ index: 1, timestamp: 0, imagePath: "" }]),
+    });
+    expect(extractSlidesForSource).not.toHaveBeenCalled();
+    expect(events[0]).toEqual({ kind: "timeline", count: 6, hasImages: false });
+
+    const extractionPromise = session.runSlidesExtraction();
+    expect(extractSlidesForSource).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([{ kind: "timeline", count: 6, hasImages: false }]);
+    resolveExtraction?.(makeSlides(url));
+    await expect(extractionPromise).resolves.toMatchObject({
+      slides: [{ index: 1, timestamp: 1.2, imagePath: "/tmp/slide_0001.png" }],
+    });
+    expect(events).toContainEqual({ kind: "timeline", count: 1, hasImages: true });
+    expect(events.at(-1)).toEqual({ kind: "done" });
+  });
+
   it("keeps yt-dlp available for guarded YouTube slides", async () => {
     const root = mkdtempSync(join(tmpdir(), "summarize-slides-done-"));
     const binDir = join(root, "bin");

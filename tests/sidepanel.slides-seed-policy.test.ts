@@ -41,7 +41,7 @@ describe("sidepanel slides seed policy", () => {
     ).toBe(true);
   });
 
-  it("does not seed planned slides without usable duration", () => {
+  it("seeds generic placeholders before duration is known", () => {
     expect(
       shouldSeedPlannedSlidesForRun({
         durationSeconds: 0,
@@ -51,7 +51,7 @@ describe("sidepanel slides seed policy", () => {
         runUrl: "https://www.youtube.com/watch?v=abc123",
         slidesEnabled: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not seed planned slides when slides are disabled", () => {

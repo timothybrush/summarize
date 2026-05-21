@@ -241,6 +241,7 @@ const slidesSession = createSlidesSessionStore({
 const slidesState = slidesSession.state;
 const pendingSummaryRunsByUrl = new Map<string, RunStart>();
 const pendingSlidesRunsByUrl = new Map<string, { runId: string; url: string }>();
+let lastPlannedSlidesRun: RunStart | null = null;
 const slidesTextController = createSlidesTextController({
   getSlides: () => panelState.slides?.slides ?? null,
   getLengthValue: () => appearanceControls.getLengthValue(),
@@ -375,22 +376,77 @@ function attachSummaryRun(run: RunStart) {
     };
   }
   slidesState.pendingRunForPlannedSlides = runRequestsSlides ? run : null;
-  if (!panelState.summaryMarkdown?.trim()) {
-    renderMarkdownDisplay();
-  }
+  lastPlannedSlidesRun = runRequestsSlides ? run : null;
   if (runRequestsSlides) {
     startSlidesStream(run);
+    seedPlannedSlidesForRun(run);
+  }
+  if (!panelState.summaryMarkdown?.trim()) {
+    renderMarkdownDisplay();
   }
   void streamController.start(run);
 }
 
 function maybeSeedPlannedSlidesForPendingRun() {
-  if (!slidesState.pendingRunForPlannedSlides) return false;
-  if (seedPlannedSlidesForRun(slidesState.pendingRunForPlannedSlides)) {
-    slidesState.pendingRunForPlannedSlides = null;
+  const pendingRun = getPlannedSlidesRunForReseed();
+  if (!pendingRun) return false;
+  if (!isCurrentPlannedSlidesRun(pendingRun)) return false;
+  if (seedPlannedSlidesForRun(pendingRun)) {
+    if (plannedSlidesHaveUsableTimingOrImages(pendingRun)) {
+      clearPlannedSlidesRunForReseed();
+    }
     return true;
   }
   return false;
+}
+
+function getPlannedSlidesRunForReseed() {
+  if (slidesState.pendingRunForPlannedSlides) return slidesState.pendingRunForPlannedSlides;
+  if (!lastPlannedSlidesRun) return null;
+  return panelState.runId === lastPlannedSlidesRun.id ||
+    panelState.slidesRunId === lastPlannedSlidesRun.id
+    ? lastPlannedSlidesRun
+    : null;
+}
+
+function clearPlannedSlidesRunForReseed() {
+  slidesState.pendingRunForPlannedSlides = null;
+  lastPlannedSlidesRun = null;
+}
+
+function plannedSlidesHaveUsableTimingOrImages(run: RunStart) {
+  if (currentRunHasResolvedSlideImages(run)) return true;
+  const sourceId = getPlannedSlidesSourceId(run);
+  if (!panelState.slides || panelState.slides.sourceId !== sourceId) return false;
+  return panelState.slides.slides.some(
+    (slide) => Number.isFinite(slide.timestamp) || (slide.imageUrl ?? "").trim().length > 0,
+  );
+}
+
+function currentRunHasResolvedSlideImages(run: RunStart) {
+  if (!panelState.slides) return false;
+  const hasResolvedImages = panelState.slides.slides.some(
+    (slide) => (slide.imageUrl ?? "").trim().length > 0,
+  );
+  if (!hasResolvedImages) return false;
+  if (panelState.runId === run.id || panelState.slidesRunId === run.id) return true;
+  const sourceUrl = panelState.slides.sourceUrl || panelState.currentSource?.url || activeTabUrl;
+  return sourceUrl ? panelUrlsMatch(run.url, sourceUrl) : false;
+}
+
+function seedPlannedSlidesForPendingRunAndConsumeWhenReady() {
+  const pendingRun = getPlannedSlidesRunForReseed();
+  if (!pendingRun) return;
+  if (!isCurrentPlannedSlidesRun(pendingRun)) return;
+  if (seedPlannedSlidesForRun(pendingRun) && plannedSlidesHaveUsableTimingOrImages(pendingRun)) {
+    clearPlannedSlidesRunForReseed();
+  }
+}
+
+function isCurrentPlannedSlidesRun(run: RunStart) {
+  const currentUrl =
+    panelState.currentSource?.url ?? activeTabUrl ?? panelState.ui?.tab.url ?? null;
+  return currentUrl ? panelUrlsMatch(run.url, currentUrl) : false;
 }
 
 function showAutomationNotice({
@@ -1168,10 +1224,7 @@ const summaryStreamRuntime = createSummaryStreamRuntime({
     panelCacheController.scheduleSync();
   },
   seedPlannedSlidesForPendingRun: () => {
-    if (slidesState.pendingRunForPlannedSlides) {
-      seedPlannedSlidesForRun(slidesState.pendingRunForPlannedSlides);
-      slidesState.pendingRunForPlannedSlides = null;
-    }
+    seedPlannedSlidesForPendingRunAndConsumeWhenReady();
   },
   setSlidesBusy,
   setPhase,
@@ -1478,9 +1531,16 @@ summarizeControlRuntime = createSummarizeControlRuntime({
   },
 });
 
+function getPlannedSlidesSourceId(run: RunStart) {
+  const youtubeId = extractYouTubeVideoId(run.url);
+  return youtubeId ? `youtube-${youtubeId}` : `planned-${run.id}`;
+}
+
 function seedPlannedSlidesForRun(run: RunStart) {
   const durationSeconds =
     slidesState.summarizeVideoDurationSeconds ?? panelState.ui?.stats.videoDurationSeconds ?? null;
+  const hasDuration =
+    typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0;
   if (
     !shouldSeedPlannedSlidesForRun({
       durationSeconds,
@@ -1508,24 +1568,37 @@ function seedPlannedSlidesForRun(run: RunStart) {
               ? 120
               : 300;
 
-  const target = Math.max(3, Math.round(durationSeconds / chunkSeconds));
+  const defaultCount = 6;
+  const target = hasDuration
+    ? Math.max(3, Math.round(durationSeconds / chunkSeconds))
+    : defaultCount;
   const count = Math.max(3, Math.min(80, target));
 
   const youtubeId = extractYouTubeVideoId(run.url);
-  const sourceId = youtubeId ? `youtube-${youtubeId}` : `planned-${run.id}`;
+  const sourceId = getPlannedSlidesSourceId(run);
   const sourceKind = youtubeId ? "youtube" : "direct";
-
-  if (
-    panelState.slides &&
-    panelState.slides.sourceId === sourceId &&
-    panelState.slides.slides.length > 0
-  ) {
+  if (currentRunHasResolvedSlideImages(run)) {
     return true;
+  }
+
+  const existingSlides = panelState.slides?.sourceId === sourceId ? panelState.slides : null;
+  if (existingSlides && existingSlides.slides.length > 0) {
+    const hasResolvedImages = existingSlides.slides.some(
+      (slide) => (slide.imageUrl ?? "").trim().length > 0,
+    );
+    const hasUsableTimestamps = existingSlides.slides.some((slide) =>
+      Number.isFinite(slide.timestamp),
+    );
+    if (hasResolvedImages || !hasDuration || hasUsableTimestamps) {
+      return true;
+    }
   }
 
   const slides = Array.from({ length: count }, (_, i) => {
     const ratio = count <= 1 ? 0 : i / Math.max(1, count - 1);
-    const timestamp = Math.max(0, Math.min(durationSeconds - 0.1, ratio * durationSeconds));
+    const timestamp = hasDuration
+      ? Math.max(0, Math.min(durationSeconds - 0.1, ratio * durationSeconds))
+      : Number.NaN;
     const index = i + 1;
     return { index, timestamp, imageUrl: "" };
   });
