@@ -178,6 +178,7 @@ export function createSlideImageLoader(
       const delayMs = Math.min(30_000, Math.round(500 * 1.7 ** retryCount));
       const timer = window.setTimeout(() => {
         if (img.dataset.slideImageUrl !== imageUrl) return;
+        if (!img.isConnected) return;
         void setSlideImage(img, imageUrl);
       }, delayMs);
       slideImageRetryTimers.set(img, timer);

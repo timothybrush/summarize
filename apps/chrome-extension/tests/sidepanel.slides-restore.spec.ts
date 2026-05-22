@@ -15,6 +15,7 @@ import { allowFirefoxExtensionTests } from "./helpers/extension-test-config";
 import {
   getPanelSlideDescriptions,
   getPanelSlidesTimeline,
+  getPanelSummaryMarkdown,
   waitForApplySlidesHook,
   waitForSettingsHydratedHook,
 } from "./helpers/panel-hooks";
@@ -230,7 +231,7 @@ test("sidepanel replaces stale slides when rerunning the same video", async ({
         reason: "manual",
       },
     });
-    await expect(page.locator("#render")).toContainText("Summary");
+    await expect.poll(async () => await getPanelSummaryMarkdown(page)).toContain("Summary");
 
     await page.evaluate(
       (payload) => {
@@ -280,7 +281,7 @@ test("sidepanel replaces stale slides when rerunning the same video", async ({
         reason: "manual",
       },
     });
-    await expect(page.locator("#render")).toContainText("Summary");
+    await expect.poll(async () => await getPanelSummaryMarkdown(page)).toContain("Summary");
 
     await page.evaluate(
       (payload) => {
