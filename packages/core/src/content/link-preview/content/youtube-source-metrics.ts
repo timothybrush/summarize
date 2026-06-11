@@ -186,7 +186,7 @@ export async function fetchYoutubeSourceMetrics({
         observedAt: new Date(startedAt).toISOString(),
       }
     : null;
-  if (htmlObservation?.viewCount !== null) return htmlObservation;
+  if (htmlObservation && htmlObservation.viewCount !== null) return htmlObservation;
 
   const remainingAfterHtml = Math.max(0, timeoutMs - (Date.now() - startedAt));
   let playerObservation: SourceMetrics | null = null;
