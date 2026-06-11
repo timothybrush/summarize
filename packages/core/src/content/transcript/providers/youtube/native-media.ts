@@ -51,8 +51,10 @@ export async function tryNativeYoutubeMediaTranscript(
         provider: "youtube-media",
         resolver: media.resolver,
         transcriptionProvider: result.provider,
-        ...(flow.durationMetadata ??
-          (media.durationSeconds ? { durationSeconds: media.durationSeconds } : {})),
+        ...(flow.durationMetadata ?? {}),
+        ...(flow.durationMetadata?.durationSeconds == null && media.durationSeconds
+          ? { durationSeconds: media.durationSeconds }
+          : {}),
       },
       attemptedProviders: flow.attemptedProviders,
       notes: joinNotes(flow.notes),

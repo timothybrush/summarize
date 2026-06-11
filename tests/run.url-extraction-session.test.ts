@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createLinkPreviewClient = vi.hoisted(() => vi.fn());
+const fetchYoutubeSourceMetrics = vi.hoisted(() => vi.fn());
 const buildExtractCacheKey = vi.hoisted(() => vi.fn(() => "extract-key"));
 const fetchLinkContentWithBirdTip = vi.hoisted(() => vi.fn());
 const identifySpeakersInExtractedContent = vi.hoisted(() => vi.fn());
@@ -12,6 +13,11 @@ const rememberSpeakerMappings = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/content/index.js", () => ({
   createLinkPreviewClient,
+}));
+
+vi.mock("@steipete/summarize-core/content", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@steipete/summarize-core/content")>()),
+  fetchYoutubeSourceMetrics,
 }));
 
 vi.mock("../src/cache.js", () => ({
@@ -84,6 +90,7 @@ describe("createUrlExtractionSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createLinkPreviewClient.mockReturnValue({});
+    fetchYoutubeSourceMetrics.mockResolvedValue(null);
     fetchLinkContentWithBirdTip.mockResolvedValue({
       content: "video transcript",
       title: null,
@@ -443,6 +450,201 @@ describe("createUrlExtractionSession", () => {
         throwOnAssetLikeHtmlError: true,
       }),
     });
+  });
+
+  it("refreshes legacy YouTube extract cache entries without source metrics", async () => {
+    fetchYoutubeSourceMetrics.mockResolvedValueOnce({
+      platform: "youtube",
+      videoId: "abcdefghijk",
+      viewCount: 19_335,
+      observedAt: "2026-06-11T19:00:00.000Z",
+    });
+    const ctx = createCtx();
+    ctx.cache.store.getJson.mockReturnValue({ content: "cached transcript" });
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    await session.fetchWithCache("https://www.youtube.com/watch?v=abcdefghijk");
+
+    expect(fetchLinkContentWithBirdTip).not.toHaveBeenCalled();
+    expect(fetchYoutubeSourceMetrics).toHaveBeenCalled();
+    expect(ctx.cache.store.setJson).toHaveBeenCalled();
+  });
+
+  it("keeps a legacy cached transcript when source metric refresh fails", async () => {
+    const cached = {
+      content: "cached transcript",
+      video: { kind: "youtube", url: "https://www.youtube.com/watch?v=abcdefghijk" },
+    };
+    const ctx = createCtx();
+    ctx.cache.store.getJson.mockReturnValue(cached);
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    await expect(
+      session.fetchWithCache("https://www.youtube.com/watch?v=abcdefghijk"),
+    ).resolves.toBe(cached);
+  });
+
+  it("keeps a legacy transcript when metric refresh temporarily returns unavailable", async () => {
+    const fresh = await fetchLinkContentWithBirdTip();
+    const cached = {
+      ...fresh,
+      content: "cached transcript",
+      transcriptSource: "captionTracks",
+      sourceMetrics: null,
+      video: { kind: "youtube", url: "https://www.youtube.com/watch?v=abcdefghijk" },
+    };
+    fetchYoutubeSourceMetrics.mockResolvedValueOnce({
+      platform: "youtube",
+      videoId: "abcdefghijk",
+      viewCount: 20,
+      observedAt: "2026-06-11T20:00:00.000Z",
+    });
+    const ctx = createCtx();
+    ctx.cache.store.getJson.mockReturnValue(cached);
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    const result = await session.fetchWithCache("https://www.youtube.com/watch?v=abcdefghijk");
+
+    expect(result.content).toBe("cached transcript");
+    expect(result.transcriptSource).toBe("captionTracks");
+    expect(result.sourceMetrics?.viewCount).toBe(20);
+  });
+
+  it("uses a matching identified-speaker cache entry when metric refresh fails", async () => {
+    const cached = {
+      content: "Chris Williamson: cached transcript",
+      transcriptSource: "captionTracks",
+      video: { kind: "youtube", url: "https://www.youtube.com/watch?v=abcdefghijk" },
+    };
+    const ctx = createCtx();
+    ctx.flags.speakerIdentification = {
+      sourceKey: "youtube:abcdefghijk",
+      profileName: "modern-wisdom",
+      host: "Chris Williamson",
+      knownSpeakers: ["Chris Williamson"],
+      context: "Modern Wisdom podcast",
+      model: "openai/gpt-5.5",
+      minimumConfidence: 0.85,
+      anchors: [],
+      remembered: null,
+      remember: false,
+      explicit: true,
+    };
+    ctx.cache.store.getJson.mockReturnValue(cached);
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    await expect(
+      session.fetchWithCache("https://www.youtube.com/watch?v=abcdefghijk"),
+    ).resolves.toBe(cached);
+  });
+
+  it("does not refresh legacy cache entries for YouTube pages without a video", async () => {
+    const cached = { content: "channel page", video: null };
+    const ctx = createCtx();
+    ctx.cache.store.getJson.mockReturnValue(cached);
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    await expect(session.fetchWithCache("https://www.youtube.com/@example")).resolves.toBe(cached);
+    expect(fetchLinkContentWithBirdTip).not.toHaveBeenCalled();
+  });
+
+  it("does not migrate metrics for generic articles with incidental YouTube embeds", async () => {
+    const cached = {
+      content: "article",
+      transcriptSource: "html",
+      sourceMetrics: null,
+      video: { kind: "youtube", url: "https://www.youtube.com/watch?v=abcdefghijk" },
+    };
+    const ctx = createCtx();
+    ctx.cache.store.getJson.mockReturnValue(cached);
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    await expect(session.fetchWithCache("https://example.com/article")).resolves.toBe(cached);
+    expect(fetchLinkContentWithBirdTip).not.toHaveBeenCalled();
+  });
+
+  it("keeps processed extracts cached while source metrics refresh separately", async () => {
+    const fresh = await fetchLinkContentWithBirdTip();
+    fetchLinkContentWithBirdTip.mockClear();
+    fetchLinkContentWithBirdTip.mockResolvedValueOnce({
+      ...fresh,
+      sourceMetrics: {
+        platform: "youtube",
+        videoId: "abcdefghijk",
+        viewCount: 19_335,
+        observedAt: "2026-06-11T19:00:00.000Z",
+      },
+    });
+    const ctx = createCtx();
+    ctx.cache.ttlMs = 2 * 60 * 60 * 1_000;
+    const session = createUrlExtractionSession({
+      ctx: ctx as never,
+      markdown: {
+        convertHtmlToMarkdown: vi.fn(),
+        effectiveMarkdownMode: "off",
+        markdownRequested: false,
+      },
+      onProgress: null,
+    });
+
+    await session.fetchWithCache("https://www.youtube.com/watch?v=abcdefghijk");
+
+    expect(ctx.cache.store.setJson).toHaveBeenCalledWith(
+      "extract",
+      "extract-key",
+      expect.objectContaining({
+        sourceMetrics: expect.objectContaining({ viewCount: 19_335 }),
+      }),
+      2 * 60 * 60 * 1_000,
+    );
   });
 
   it("surfaces podcast extraction errors instead of falling back to empty URL-only content", async () => {

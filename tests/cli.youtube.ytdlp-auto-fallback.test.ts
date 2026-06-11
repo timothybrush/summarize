@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/run.js";
 
 vi.mock("../packages/core/src/content/transcript/providers/youtube/yt-dlp.js", () => ({
+  fetchMediaMetadataWithYtDlp: vi.fn(async () => null),
   fetchDurationSecondsWithYtDlp: vi.fn(async () => null),
   fetchTranscriptWithYtDlp: vi.fn(async () => {
     return { text: "hello from ytdlp", provider: "cpp", error: null, notes: [] };

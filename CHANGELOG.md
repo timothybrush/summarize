@@ -7,6 +7,7 @@
 ### Features
 
 - CLI media: allow `--diarize` and speaker identification for local and direct audio/video inputs, including MP3 and MP4, instead of limiting speaker-labelled transcription to YouTube.
+- YouTube transcripts: include a timestamped public view count in structured extraction results and human transcript output, with a one-hour extraction cache window for mutable metrics.
 - YouTube transcripts: fall back to Android VR direct audio resolution and configured transcription when `yt-dlp` is missing or fails, while preserving explicit `--youtube yt-dlp` and diarization requirements.
 - Chrome extension: transcribe captionless YouTube videos without the daemon using active-player/watch-page or Android VR direct audio, captured SABR fallback, MediaBunny/WebCodecs, and browser-cached multilingual Whisper Tiny.
 - Chrome extension: transcribe fetchable direct and embedded media without the daemon using ranged MediaBunny/WebCodecs decoding, bounded audio chunks, and an idle-evictable browser Whisper runtime.

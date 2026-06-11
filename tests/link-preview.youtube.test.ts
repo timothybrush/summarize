@@ -202,4 +202,15 @@ describe("link preview extraction (YouTube)", () => {
       client.fetchLinkContent("https://www.youtube.com/watch?v=invalid_video_id"),
     ).rejects.toThrow(/Invalid YouTube video id/i);
   });
+
+  it("does not attach video metrics to a YouTube channel page", async () => {
+    const html =
+      "<!doctype html><html><head><title>Channel</title></head><body>Channel page</body></html>";
+    const fetchMock = vi.fn(async () => htmlResponse(html));
+    const client = createLinkPreviewClient({ fetch: fetchMock as unknown as typeof fetch });
+
+    const result = await client.fetchLinkContent("https://www.youtube.com/@example");
+
+    expect(result.sourceMetrics).toBeNull();
+  });
 });

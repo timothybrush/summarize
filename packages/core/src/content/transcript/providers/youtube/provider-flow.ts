@@ -11,10 +11,11 @@ import { extractYoutubeiTranscriptConfig, fetchTranscriptFromTranscriptEndpoint 
 import { fetchTranscriptWithApify } from "./apify.js";
 import {
   extractYoutubeDurationSeconds,
+  extractYoutubeViewCount,
   fetchTranscriptFromCaptionTracks,
-  fetchYoutubeDurationSecondsViaPlayer,
+  fetchYoutubePlayerMetadata,
 } from "./captions.js";
-import { fetchDurationSecondsWithYtDlp, fetchTranscriptWithYtDlp } from "./yt-dlp.js";
+import { fetchMediaMetadataWithYtDlp, fetchTranscriptWithYtDlp } from "./yt-dlp.js";
 
 /**
  * Check if a transcript is suspiciously short relative to the video duration.
@@ -24,8 +25,8 @@ import { fetchDurationSecondsWithYtDlp, fetchTranscriptWithYtDlp } from "./yt-dl
  * a broken/truncated caption track.
  */
 function isTranscriptTruncated(text: string, durationMetadata: DurationMetadata): boolean {
-  if (!durationMetadata) return false;
-  const { durationSeconds } = durationMetadata;
+  const durationSeconds = durationMetadata.durationSeconds;
+  if (!durationSeconds) return false;
   if (durationSeconds < 180) return false;
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const expectedMinWords = durationSeconds / 3;
@@ -39,7 +40,15 @@ const WATCH_PAGE_HEADERS = {
   Accept: "text/html,application/xhtml+xml",
 };
 
-type DurationMetadata = { durationSeconds: number } | null;
+type DurationMetadata = {
+  durationSeconds?: number;
+  sourceMetrics?: {
+    platform: "youtube";
+    videoId: string;
+    viewCount: number | null;
+    observedAt: string;
+  };
+};
 
 export type YouTubeProviderFlow = {
   context: ProviderContext;
@@ -86,26 +95,50 @@ export async function resolveDurationMetadata(args: {
   options: ProviderFetchOptions;
 }): Promise<DurationMetadata> {
   const { htmlText, effectiveVideoId, url, options } = args;
+  const startedAt = Date.now();
+  const remainingTimeoutMs = () =>
+    options.timeoutMs == null
+      ? undefined
+      : Math.max(1, options.timeoutMs - (Date.now() - startedAt));
 
   let durationSeconds = extractYoutubeDurationSeconds(htmlText);
+  let viewCount = extractYoutubeViewCount(htmlText);
   if (!durationSeconds && effectiveVideoId) {
-    durationSeconds = await fetchYoutubeDurationSecondsViaPlayer(options.fetch, {
+    const playerMetadata = await fetchYoutubePlayerMetadata(options.fetch, {
       html: htmlText,
       videoId: effectiveVideoId,
+      timeoutMs: remainingTimeoutMs(),
     });
+    durationSeconds ??= playerMetadata?.durationSeconds ?? null;
+    viewCount ??= playerMetadata?.viewCount ?? null;
   }
   if (!durationSeconds && options.ytDlpPath) {
-    durationSeconds = await fetchDurationSecondsWithYtDlp({
+    const ytDlpMetadata = await fetchMediaMetadataWithYtDlp({
       ytDlpPath: options.ytDlpPath,
       url,
+      timeoutMs: remainingTimeoutMs(),
     });
+    durationSeconds ??= ytDlpMetadata?.durationSeconds ?? null;
+    viewCount ??= ytDlpMetadata?.viewCount ?? null;
   }
 
-  return typeof durationSeconds === "number" &&
+  return {
+    ...(typeof durationSeconds === "number" &&
     Number.isFinite(durationSeconds) &&
     durationSeconds > 0
-    ? { durationSeconds }
-    : null;
+      ? { durationSeconds }
+      : {}),
+    ...(effectiveVideoId
+      ? {
+          sourceMetrics: {
+            platform: "youtube" as const,
+            videoId: effectiveVideoId,
+            viewCount,
+            observedAt: new Date().toISOString(),
+          },
+        }
+      : {}),
+  };
 }
 
 export async function tryApifyTranscript(

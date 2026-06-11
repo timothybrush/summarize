@@ -56,6 +56,12 @@ type YtDlpRequest = {
 type YtDlpDurationRequest = {
   ytDlpPath: string | null;
   url: string;
+  timeoutMs?: number;
+};
+
+export type YtDlpMediaMetadata = {
+  durationSeconds: number | null;
+  viewCount: number | null;
 };
 
 export const fetchTranscriptWithYtDlp = async ({
@@ -277,10 +283,11 @@ export const fetchTranscriptWithYtDlp = async ({
   }
 };
 
-export const fetchDurationSecondsWithYtDlp = async ({
+export const fetchMediaMetadataWithYtDlp = async ({
   ytDlpPath,
   url,
-}: YtDlpDurationRequest): Promise<number | null> => {
+  timeoutMs = 30_000,
+}: YtDlpDurationRequest): Promise<YtDlpMediaMetadata | null> => {
   if (!ytDlpPath) return null;
 
   return new Promise((resolve) => {
@@ -293,10 +300,13 @@ export const fetchDurationSecondsWithYtDlp = async ({
     let stdout = "";
     let stderr = "";
 
-    const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
-      resolve(null);
-    }, 30_000);
+    const timeout = setTimeout(
+      () => {
+        proc.kill("SIGKILL");
+        resolve(null);
+      },
+      Math.max(1, Math.min(timeoutMs, 30_000)),
+    );
 
     proc.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -324,9 +334,13 @@ export const fetchDurationSecondsWithYtDlp = async ({
         return;
       }
       try {
-        const parsed = JSON.parse(jsonLine) as { duration?: unknown };
+        const parsed = JSON.parse(jsonLine) as { duration?: unknown; view_count?: unknown };
         const duration = typeof parsed.duration === "number" ? parsed.duration : Number.NaN;
-        resolve(Number.isFinite(duration) && duration > 0 ? duration : null);
+        const viewCount = typeof parsed.view_count === "number" ? parsed.view_count : Number.NaN;
+        resolve({
+          durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
+          viewCount: Number.isSafeInteger(viewCount) && viewCount >= 0 ? viewCount : null,
+        });
       } catch {
         resolve(null);
       }
@@ -338,6 +352,10 @@ export const fetchDurationSecondsWithYtDlp = async ({
     });
   });
 };
+
+export const fetchDurationSecondsWithYtDlp = async (
+  request: YtDlpDurationRequest,
+): Promise<number | null> => (await fetchMediaMetadataWithYtDlp(request))?.durationSeconds ?? null;
 
 async function downloadAudio(
   ytDlpPath: string,

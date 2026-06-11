@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   extractYoutubeDurationSeconds,
+  extractYoutubeViewCount,
   fetchTranscriptFromCaptionTracks,
 } from "../packages/core/src/content/transcript/providers/youtube/captions.js";
 
@@ -91,5 +92,14 @@ describe("YouTube captionTracks edge cases", () => {
       "</head><body></body></html>";
 
     expect(extractYoutubeDurationSeconds(html)).toBe(1980);
+  });
+
+  it("extracts the public view count from the initial player response", () => {
+    const html = `ytInitialPlayerResponse = ${JSON.stringify({
+      videoDetails: { lengthSeconds: "1980", viewCount: "19335" },
+    })};`;
+
+    expect(extractYoutubeViewCount(html)).toBe(19_335);
+    expect(extractYoutubeViewCount("<html></html>")).toBeNull();
   });
 });

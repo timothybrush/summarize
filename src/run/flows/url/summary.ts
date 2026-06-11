@@ -13,6 +13,7 @@ import {
   interleaveSlidesIntoTranscript,
   normalizeSummarySlideHeadings,
 } from "./slides-text.js";
+import { formatSourceMetricsHeader } from "./source-metrics.js";
 import {
   buildFinishExtras,
   buildModelMetaFromAttempt,
@@ -280,6 +281,10 @@ export async function outputExtractedUrl({
     extracted.content.toLowerCase().startsWith("transcript:")
       ? `Transcript:\n${extracted.transcriptTimedText}`
       : extracted.content;
+  const sourceMetricsHeader = formatSourceMetricsHeader(extracted.sourceMetrics);
+  const extractWithMetrics = sourceMetricsHeader
+    ? `${sourceMetricsHeader}\n\n${extractCandidate}`
+    : extractCandidate;
 
   const slideTags =
     slides?.slides && slides.slides.length > 0
@@ -298,8 +303,12 @@ export async function outputExtractedUrl({
             timestamp: slide.timestamp,
           })),
         })
-      : `${extractCandidate.trimEnd()}\n\n${slideTags}`;
-    await slidesOutput.renderFromText(interleaved);
+      : `${extractWithMetrics.trimEnd()}\n\n${slideTags}`;
+    const interleavedWithMetrics =
+      transcriptText && sourceMetricsHeader
+        ? `${sourceMetricsHeader}\n\n${interleaved}`
+        : interleaved;
+    await slidesOutput.renderFromText(interleavedWithMetrics);
     hooks.restoreProgressAfterStdout?.();
     const slideFooter = slides ? [`slides ${slides.slides.length}`] : [];
     hooks.writeViaFooter([...extractionUi.footerParts, ...slideFooter]);
@@ -328,13 +337,13 @@ export async function outputExtractedUrl({
 
   const renderedExtract =
     flags.format === "markdown" && !flags.plain && isRichTty(io.stdout)
-      ? renderMarkdownAnsi(prepareMarkdownForTerminal(extractCandidate), {
+      ? renderMarkdownAnsi(prepareMarkdownForTerminal(extractWithMetrics), {
           width: markdownRenderWidth(io.stdout, io.env),
           wrap: true,
           color: supportsColor(io.stdout, io.envForRun),
           hyperlinks: true,
         })
-      : extractCandidate;
+      : extractWithMetrics;
 
   if (flags.format === "markdown" && !flags.plain && isRichTty(io.stdout)) {
     io.stdout.write(`\n${renderedExtract.replace(/^\n+/, "")}`);

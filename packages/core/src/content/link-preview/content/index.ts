@@ -377,6 +377,7 @@ export async function fetchLinkContent(
       transcriptDiarization,
       firecrawlDiagnostics,
       markdownRequested,
+      timeoutMs,
       deps,
     });
     if (firecrawlResult) {

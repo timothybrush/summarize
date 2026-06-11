@@ -16,6 +16,13 @@ export type FirecrawlMode = "off" | "auto" | "always";
 export type ContentFormat = "text" | "markdown";
 export type MarkdownMode = "off" | "auto" | "llm" | "readability";
 
+export type SourceMetrics = {
+  platform: "youtube";
+  videoId: string;
+  viewCount: number | null;
+  observedAt: string;
+};
+
 export interface FetchLinkContentOptions {
   timeoutMs?: number;
   maxCharacters?: number;
@@ -57,6 +64,7 @@ export interface ExtractedLinkContent {
   transcriptSegments: TranscriptSegment[] | null;
   transcriptTimedText: string | null;
   mediaDurationSeconds: number | null;
+  sourceMetrics?: SourceMetrics | null;
   video: { kind: "youtube" | "direct"; url: string } | null;
   isVideoOnly: boolean;
   diagnostics: ContentFetchDiagnostics;

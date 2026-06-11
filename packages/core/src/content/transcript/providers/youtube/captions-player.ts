@@ -1,5 +1,4 @@
 import { withBunCompressionHeaders } from "../../../bun.js";
-import { fetchWithTimeout } from "../../../link-preview/fetch-with-timeout.js";
 import { extractYoutubeiBootstrap } from "./api.js";
 import {
   INNERTUBE_API_KEY_REGEX,
@@ -89,6 +88,13 @@ function coerceDurationSeconds(value: unknown): number | null {
   return asNumber;
 }
 
+function coerceCount(value: unknown): number | null {
+  const asNumber =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(asNumber) || asNumber < 0) return null;
+  return asNumber;
+}
+
 function extractDurationSecondsFromHtml(html: string): number | null {
   const candidates = [
     /"lengthSeconds":"(\d+)"/,
@@ -126,6 +132,25 @@ export function extractDurationSecondsFromPlayerPayload(
   return null;
 }
 
+export function extractViewCountFromPlayerPayload(payload: Record<string, unknown>): number | null {
+  const videoDetails = payload.videoDetails;
+  if (isObjectLike(videoDetails)) {
+    const viewCount = coerceCount(videoDetails.viewCount);
+    if (viewCount !== null) return viewCount;
+  }
+
+  const microformat = payload.microformat;
+  if (isObjectLike(microformat)) {
+    const renderer = microformat.playerMicroformatRenderer;
+    if (isObjectLike(renderer)) {
+      const viewCount = coerceCount(renderer.viewCount);
+      if (viewCount !== null) return viewCount;
+    }
+  }
+
+  return null;
+}
+
 export function extractYoutubeDurationSeconds(html: string): number | null {
   const playerResponse = extractInitialPlayerResponse(html);
   if (playerResponse) {
@@ -136,6 +161,11 @@ export function extractYoutubeDurationSeconds(html: string): number | null {
   return extractDurationSecondsFromHtml(html);
 }
 
+export function extractYoutubeViewCount(html: string): number | null {
+  const playerResponse = extractInitialPlayerResponse(html);
+  return playerResponse ? extractViewCountFromPlayerPayload(playerResponse) : null;
+}
+
 export function extractInnertubeApiKey(html: string): string | null {
   const match = html.match(INNERTUBE_API_KEY_REGEX);
   const key = match?.[1] ?? match?.[2] ?? null;
@@ -144,7 +174,7 @@ export function extractInnertubeApiKey(html: string): string | null {
 
 export async function fetchYoutubePlayerPayload(
   fetchImpl: typeof fetch,
-  { html, videoId }: { html: string; videoId: string },
+  { html, videoId, timeoutMs }: { html: string; videoId: string; timeoutMs?: number },
 ): Promise<Record<string, unknown> | null> {
   const bootstrap = extractYoutubeiBootstrap(html);
   const apiKey = bootstrap?.apiKey ?? extractInnertubeApiKey(html);
@@ -172,10 +202,10 @@ export async function fetchYoutubePlayerPayload(
       REQUEST_HEADERS["User-Agent"] ??
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
-    const response = await fetchWithTimeout(
-      fetchImpl,
-      `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`,
-      {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? 120_000);
+    try {
+      const response = await fetchImpl(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
         method: "POST",
         headers: withBunCompressionHeaders({
           "Content-Type": "application/json",
@@ -184,12 +214,15 @@ export async function fetchYoutubePlayerPayload(
           Accept: "application/json",
         }),
         body: JSON.stringify(requestBody),
-      },
-    );
+        signal: controller.signal,
+      });
 
-    if (!response.ok) return null;
-    const parsed: unknown = await response.json();
-    return isObjectLike(parsed) ? parsed : null;
+      if (!response.ok) return null;
+      const parsed: unknown = await response.json();
+      return isObjectLike(parsed) ? parsed : null;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return null;
   }
@@ -202,4 +235,16 @@ export async function fetchYoutubeDurationSecondsViaPlayer(
   const payload = await fetchYoutubePlayerPayload(fetchImpl, { html, videoId });
   if (!payload) return null;
   return extractDurationSecondsFromPlayerPayload(payload);
+}
+
+export async function fetchYoutubePlayerMetadata(
+  fetchImpl: typeof fetch,
+  { html, videoId, timeoutMs }: { html: string; videoId: string; timeoutMs?: number },
+): Promise<{ durationSeconds: number | null; viewCount: number | null } | null> {
+  const payload = await fetchYoutubePlayerPayload(fetchImpl, { html, videoId, timeoutMs });
+  if (!payload) return null;
+  return {
+    durationSeconds: extractDurationSecondsFromPlayerPayload(payload),
+    viewCount: extractViewCountFromPlayerPayload(payload),
+  };
 }

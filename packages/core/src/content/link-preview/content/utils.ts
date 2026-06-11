@@ -197,6 +197,27 @@ export function finalizeExtractedLinkContent({
   const transcriptTimedText = transcriptSegments
     ? formatTranscriptSegments(transcriptSegments)
     : null;
+  const rawSourceMetrics = transcriptResolution.metadata?.sourceMetrics;
+  const sourceMetricsRecord =
+    rawSourceMetrics && typeof rawSourceMetrics === "object" && !Array.isArray(rawSourceMetrics)
+      ? (rawSourceMetrics as Record<string, unknown>)
+      : null;
+  const sourceMetrics =
+    sourceMetricsRecord?.platform === "youtube" &&
+    typeof sourceMetricsRecord.videoId === "string" &&
+    sourceMetricsRecord.videoId.length > 0 &&
+    (sourceMetricsRecord.viewCount === null ||
+      (typeof sourceMetricsRecord.viewCount === "number" &&
+        Number.isSafeInteger(sourceMetricsRecord.viewCount) &&
+        sourceMetricsRecord.viewCount >= 0)) &&
+    typeof sourceMetricsRecord.observedAt === "string"
+      ? {
+          platform: "youtube" as const,
+          videoId: sourceMetricsRecord.videoId,
+          viewCount: sourceMetricsRecord.viewCount as number | null,
+          observedAt: sourceMetricsRecord.observedAt,
+        }
+      : null;
 
   return {
     url,
@@ -216,6 +237,7 @@ export function finalizeExtractedLinkContent({
     transcriptSegments,
     transcriptTimedText,
     mediaDurationSeconds,
+    sourceMetrics,
     video,
     isVideoOnly,
     diagnostics,

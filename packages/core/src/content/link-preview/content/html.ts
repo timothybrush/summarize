@@ -22,6 +22,7 @@ import {
   selectBaseContent,
 } from "./utils.js";
 import { detectPrimaryVideoFromHtml } from "./video.js";
+import { refreshYoutubeSourceMetrics } from "./youtube-source-metrics.js";
 import { extractYouTubeShortDescription } from "./youtube.js";
 
 const LEADING_CONTROL_PATTERN = /^[\s\p{Cc}]+/u;
@@ -77,6 +78,7 @@ export async function buildResultFromHtmlDocument({
   deps: LinkPreviewDeps;
   readabilityCandidate: Awaited<ReturnType<typeof extractReadabilityFromHtml>> | null;
 }): Promise<ExtractedLinkContent> {
+  const extractionStartedAt = Date.now();
   if (isYouTubeVideoUrl(url) && !extractYouTubeVideoId(url)) {
     throw new Error("Invalid YouTube video id in URL");
   }
@@ -122,12 +124,23 @@ export async function buildResultFromHtmlDocument({
   const effectiveNormalizedWithDescription = preferDescription
     ? descriptionCandidate
     : effectiveNormalized;
+  const detectedVideo = detectPrimaryVideoFromHtml(html, url);
   const transcriptResolution = await resolveTranscriptForLink(url, html, deps, {
+    timeoutMs,
     youtubeTranscriptMode,
     mediaTranscriptMode,
     transcriptTimestamps,
     transcriptDiarization,
     cacheMode,
+  });
+  await refreshYoutubeSourceMetrics({
+    url,
+    html,
+    detectedVideo,
+    transcriptResolution,
+    deps,
+    timeoutMs,
+    startedAtMs: extractionStartedAt,
   });
 
   const youtubeDescription =
@@ -215,7 +228,7 @@ export async function buildResultFromHtmlDocument({
     }
   })();
 
-  const video = detectPrimaryVideoFromHtml(html, url);
+  const video = detectedVideo;
   const isVideoOnly =
     !transcriptResolution.text &&
     baseContent.length < MIN_HTML_CONTENT_CHARACTERS &&

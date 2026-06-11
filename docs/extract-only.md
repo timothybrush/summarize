@@ -20,6 +20,7 @@ Deprecated alias: `--extract-only`.
 - `--format md` may still convert HTML to Markdown (depending on `--markdown-mode` and available tools).
 - `--length` is intended for summarization guidance; extraction prints full content.
 - `--timestamps` keeps the plain transcript text but also exposes `transcriptSegments` and `transcriptTimedText` (JSON) and prints a timed transcript block when available.
+- YouTube transcript output includes the public view count when available. JSON exposes `extracted.sourceMetrics` with `platform`, `videoId`, `viewCount`, and `observedAt`; human output prints `YouTube views: <count>` before the transcript. Metrics refresh at least hourly even when the transcript remains cached.
 - `--slides` runs slide detection (YouTube/direct video URLs/local video files). Slide metadata is included in JSON output and written to `slides.json` in the slide directory.
   - When combined with `--extract` for videos that have timed transcripts, the CLI interleaves slide images inline at matching timestamps.
   - Scene detection auto-tunes using sampled frame hashes.

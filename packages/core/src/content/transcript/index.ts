@@ -36,6 +36,7 @@ import {
 } from "./utils.js";
 
 interface ResolveTranscriptOptions {
+  timeoutMs?: number;
   youtubeTranscriptMode?: ProviderFetchOptions["youtubeTranscriptMode"];
   mediaTranscriptMode?: ProviderFetchOptions["mediaTranscriptMode"];
   mediaKindHint?: ProviderFetchOptions["mediaKindHint"];
@@ -57,6 +58,7 @@ export const resolveTranscriptForLink = async (
   html: string | null,
   deps: LinkPreviewDeps,
   {
+    timeoutMs,
     youtubeTranscriptMode,
     mediaTranscriptMode,
     mediaKindHint,
@@ -95,11 +97,35 @@ export const resolveTranscriptForLink = async (
     notes: cacheOutcome.diagnostics.notes ?? null,
   };
 
-  if (cacheOutcome.resolution) {
+  const cachedSourceMetrics =
+    cacheOutcome.resolution?.metadata?.sourceMetrics ??
+    cacheOutcome.cached?.metadata?.sourceMetrics;
+  const cachedSourceMetricsRecord =
+    cachedSourceMetrics &&
+    typeof cachedSourceMetrics === "object" &&
+    !Array.isArray(cachedSourceMetrics)
+      ? (cachedSourceMetrics as Record<string, unknown>)
+      : null;
+  const cachedVideoId =
+    typeof cachedSourceMetricsRecord?.videoId === "string"
+      ? cachedSourceMetricsRecord.videoId
+      : null;
+  const embeddedVideoIdentityMismatch = Boolean(
+    cacheOutcome.cached && embeddedYoutubeUrl && resourceKey && cachedVideoId !== resourceKey,
+  );
+
+  if (cacheOutcome.resolution && !embeddedVideoIdentityMismatch) {
     return {
       ...cacheOutcome.resolution,
       diagnostics,
     };
+  }
+  if (embeddedVideoIdentityMismatch) {
+    diagnostics.cacheStatus = "miss";
+    diagnostics.notes = appendNote(
+      diagnostics.notes,
+      "Cached transcript ignored because the embedded YouTube video changed or was not recorded",
+    );
   }
 
   const shouldReportProgress = provider.id === "youtube" || provider.id === "podcast";
@@ -127,6 +153,7 @@ export const resolveTranscriptForLink = async (
 
   const providerResult = await executeProvider(provider, baseContext, {
     fetch: deps.fetch,
+    timeoutMs,
     env: deps.env,
     scrapeWithFirecrawl: deps.scrapeWithFirecrawl,
     apifyApiToken: deps.apifyApiToken,
@@ -193,6 +220,7 @@ export const resolveTranscriptForLink = async (
 
   if (
     !providerResult.text &&
+    !embeddedVideoIdentityMismatch &&
     cacheOutcome.cached?.content &&
     cacheMode !== "bypass" &&
     isCachedDiarizationCompatible(cacheOutcome.cached.metadata, transcriptDiarization ?? null)

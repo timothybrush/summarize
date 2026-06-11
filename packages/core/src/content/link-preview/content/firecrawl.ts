@@ -23,6 +23,7 @@ import {
   selectBaseContent,
 } from "./utils.js";
 import { detectPrimaryVideoFromHtml } from "./video.js";
+import { refreshYoutubeSourceMetrics } from "./youtube-source-metrics.js";
 
 export function shouldFallbackToFirecrawl(html: string): boolean {
   const plainText = normalizeForPrompt(extractPlainText(html));
@@ -49,6 +50,7 @@ export async function buildResultFromFirecrawl({
   transcriptDiarization,
   firecrawlDiagnostics,
   markdownRequested,
+  timeoutMs,
   deps,
 }: {
   url: string;
@@ -61,8 +63,10 @@ export async function buildResultFromFirecrawl({
   transcriptDiarization?: FetchLinkContentOptions["transcriptDiarization"];
   firecrawlDiagnostics: FirecrawlDiagnostics;
   markdownRequested: boolean;
+  timeoutMs: number;
   deps: LinkPreviewDeps;
 }): Promise<ExtractedLinkContent | null> {
+  const extractionStartedAt = Date.now();
   const normalizedMarkdown = normalizeForPrompt(payload.markdown ?? "");
   if (normalizedMarkdown.length === 0) {
     firecrawlDiagnostics.notes = appendNote(
@@ -76,12 +80,25 @@ export async function buildResultFromFirecrawl({
   const isPodcastJsonLd = isPodcastLikeJsonLdType(jsonLd?.type);
 
   const transcriptResolution = await resolveTranscriptForLink(url, payload.html ?? null, deps, {
+    timeoutMs,
     youtubeTranscriptMode,
     mediaTranscriptMode,
     transcriptTimestamps,
     transcriptDiarization,
     cacheMode,
   });
+  const video = payload.html ? detectPrimaryVideoFromHtml(payload.html, url) : null;
+  if (payload.html) {
+    await refreshYoutubeSourceMetrics({
+      url,
+      html: payload.html,
+      detectedVideo: video,
+      transcriptResolution,
+      deps,
+      timeoutMs,
+      startedAtMs: extractionStartedAt,
+    });
+  }
   const htmlMetadata = payload.html
     ? extractMetadataFromHtml(payload.html, url)
     : { title: null, description: null, siteName: null };
@@ -123,7 +140,6 @@ export async function buildResultFromFirecrawl({
     cacheMode ?? "default",
   );
 
-  const video = payload.html ? detectPrimaryVideoFromHtml(payload.html, url) : null;
   const isVideoOnly =
     !transcriptResolution.text &&
     normalizedMarkdown.length < MIN_HTML_CONTENT_CHARACTERS &&

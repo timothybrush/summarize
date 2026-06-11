@@ -17,8 +17,10 @@ export {
   DEFAULT_TIMEOUT_MS,
   type ExtractedLinkContent,
   type FetchLinkContentOptions,
+  type SourceMetrics,
 } from "./link-preview/content/types.js";
 export { applyContentBudget } from "./link-preview/content/cleaner.js";
+export { fetchYoutubeSourceMetrics } from "./link-preview/content/youtube-source-metrics.js";
 export {
   attachDnsPinnedAddresses,
   isNativeOrBoundGlobalFetch,

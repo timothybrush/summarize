@@ -1,4 +1,4 @@
-import { NEGATIVE_TTL_MS } from "@steipete/summarize-core/content";
+import { fetchYoutubeSourceMetrics, NEGATIVE_TTL_MS } from "@steipete/summarize-core/content";
 import * as urlUtils from "@steipete/summarize-core/content/url";
 import { buildExtractCacheKey } from "../../../cache.js";
 import {
@@ -25,6 +25,20 @@ import type { UrlFlowContext } from "./types.js";
 type LinkPreviewClientOptions = NonNullable<Parameters<typeof createLinkPreviewClient>[0]>;
 type ConvertHtmlToMarkdown = LinkPreviewClientOptions["convertHtmlToMarkdown"];
 type LinkPreviewProgressHandler = ((event: LinkPreviewProgressEvent) => void) | null;
+const SOURCE_METRICS_TTL_MS = 60 * 60 * 1_000;
+const SOURCE_METRICS_RETRY_TTL_MS = 5 * 60 * 1_000;
+const SOURCE_METRICS_REFRESH_TIMEOUT_MS = 5_000;
+const YOUTUBE_TRANSCRIPT_SOURCES = new Set(["youtubei", "captionTracks", "youtube-media", "apify"]);
+
+function resolveYoutubeVideoId(extracted: ExtractedLinkContent, targetUrl: string): string | null {
+  return (
+    extracted.sourceMetrics?.videoId ??
+    (extracted.video?.kind === "youtube"
+      ? urlUtils.extractYouTubeVideoId(extracted.video.url)
+      : null) ??
+    urlUtils.extractYouTubeVideoId(targetUrl)
+  );
+}
 
 export type UrlExtractionSession = {
   cacheStore: UrlFlowContext["cache"]["store"] | null;
@@ -146,14 +160,90 @@ export function createUrlExtractionSession({
     if (!bypassExtractCache && !flags.speakerIdentification?.remember && cacheKey && cacheStore) {
       const cached = cacheStore.getJson<ExtractedLinkContent>("extract", cacheKey);
       if (cached) {
+        const cachedVideoId = resolveYoutubeVideoId(cached, targetUrl);
+        const separatelyCachedMetrics = cacheStore.getJson<
+          NonNullable<ExtractedLinkContent["sourceMetrics"]>
+        >("extract", `${cacheKey}:source-metrics`);
+        const metricsFreshness = cacheStore.getJson<{ attempted: true }>(
+          "extract",
+          `${cacheKey}:source-metrics-fresh`,
+        );
+        if (metricsFreshness?.attempted === true) {
+          return {
+            ...cached,
+            sourceMetrics:
+              separatelyCachedMetrics?.videoId === cachedVideoId
+                ? separatelyCachedMetrics
+                : cached.sourceMetrics,
+          };
+        }
+        const isYoutubeTranscript =
+          (cached.transcriptSource != null &&
+            YOUTUBE_TRANSCRIPT_SOURCES.has(cached.transcriptSource)) ||
+          (cached.transcriptSource === "yt-dlp" && cached.video?.kind === "youtube");
+        const needsSourceMetricsMigration =
+          Boolean(cachedVideoId) &&
+          (Boolean(urlUtils.extractYouTubeVideoId(targetUrl)) || isYoutubeTranscript) &&
+          cached.sourceMetrics?.platform !== "youtube";
+        const observedMs = cached.sourceMetrics
+          ? Date.parse(cached.sourceMetrics.observedAt)
+          : Number.NaN;
+        const needsSourceMetricsRefresh =
+          cached.sourceMetrics?.platform === "youtube" &&
+          (!Number.isFinite(observedMs) || Date.now() - observedMs >= SOURCE_METRICS_TTL_MS);
+        if (!needsSourceMetricsMigration && !needsSourceMetricsRefresh) {
+          writeVerbose(
+            io.stderr,
+            flags.verbose,
+            "cache hit extract",
+            flags.verboseColor,
+            io.envForRun,
+          );
+          return cached;
+        }
         writeVerbose(
           io.stderr,
           flags.verbose,
-          "cache hit extract",
+          "cache refresh extract (missing source metrics)",
           flags.verboseColor,
           io.envForRun,
         );
-        return cached;
+        if (cachedVideoId) {
+          const refreshedMetrics = await fetchYoutubeSourceMetrics({
+            fetchImpl: urlFetch,
+            ytDlpPath: resolveUrlFlowYtDlpPath({
+              urlFetch: io.urlFetch,
+              ytDlpPath: model.apiStatus.ytDlpPath,
+            }),
+            videoId: cachedVideoId,
+            timeoutMs: Math.min(flags.timeoutMs, SOURCE_METRICS_REFRESH_TIMEOUT_MS),
+          });
+          if (refreshedMetrics) {
+            const refreshedCached = { ...cached, sourceMetrics: refreshedMetrics };
+            cacheStore.setJson(
+              "extract",
+              `${cacheKey}:source-metrics`,
+              refreshedMetrics,
+              cacheState.ttlMs,
+            );
+            cacheStore.setJson(
+              "extract",
+              `${cacheKey}:source-metrics-fresh`,
+              { attempted: true },
+              SOURCE_METRICS_TTL_MS,
+            );
+            return refreshedCached;
+          }
+        }
+        cacheStore.setJson(
+          "extract",
+          `${cacheKey}:source-metrics-fresh`,
+          { attempted: true },
+          SOURCE_METRICS_RETRY_TTL_MS,
+        );
+        return separatelyCachedMetrics?.videoId === cachedVideoId
+          ? { ...cached, sourceMetrics: separatelyCachedMetrics }
+          : cached;
       }
       writeVerbose(
         io.stderr,
@@ -223,9 +313,23 @@ export function createUrlExtractionSession({
         }
       }
       if (cacheable && cacheKey && cacheStore) {
-        const extractTtlMs =
+        const baseExtractTtlMs =
           extracted.transcriptSource === "unavailable" ? NEGATIVE_TTL_MS : cacheState.ttlMs;
-        cacheStore.setJson("extract", cacheKey, extracted, extractTtlMs);
+        cacheStore.setJson("extract", cacheKey, extracted, baseExtractTtlMs);
+        if (extracted.sourceMetrics?.platform === "youtube") {
+          cacheStore.setJson(
+            "extract",
+            `${cacheKey}:source-metrics`,
+            extracted.sourceMetrics,
+            cacheState.ttlMs,
+          );
+          cacheStore.setJson(
+            "extract",
+            `${cacheKey}:source-metrics-fresh`,
+            { attempted: true },
+            SOURCE_METRICS_TTL_MS,
+          );
+        }
         writeVerbose(
           io.stderr,
           flags.verbose,
