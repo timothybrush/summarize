@@ -73,6 +73,7 @@ export async function transcribeMediaUrl({
     falApiKey,
   });
   const effectiveEnv = effectiveTranscription.env ?? process.env;
+  const remoteMediaMaxBytes = effectiveTranscription.remoteMediaMaxBytes ?? MAX_REMOTE_MEDIA_BYTES;
   const startInfo = await resolveTranscriptionStartInfo({
     transcription: effectiveTranscription,
   });
@@ -80,10 +81,8 @@ export async function transcribeMediaUrl({
   const modelId = startInfo.modelId;
 
   const head = await probeRemoteMedia(fetchImpl, url);
-  if (head.contentLength !== null && head.contentLength > MAX_REMOTE_MEDIA_BYTES) {
-    throw new Error(
-      `Remote media too large (${formatBytes(head.contentLength)}). Limit is ${formatBytes(MAX_REMOTE_MEDIA_BYTES)}.`,
-    );
+  if (head.contentLength !== null && head.contentLength > remoteMediaMaxBytes) {
+    throw remoteMediaTooLargeError(head.contentLength, remoteMediaMaxBytes);
   }
 
   const mediaType = head.mediaType ?? "application/octet-stream";
@@ -99,8 +98,7 @@ export async function transcribeMediaUrl({
     totalBytes,
   });
   if (!canChunk) {
-    const bytes = await downloadCappedBytes(fetchImpl, url, MAX_OPENAI_UPLOAD_BYTES, {
-      totalBytes,
+    const bytes = await downloadCappedMediaBytes(fetchImpl, url, remoteMediaMaxBytes, totalBytes, {
       onProgress: (downloadedBytes) =>
         progress?.onProgress?.({
           kind: "transcript-media-download-progress",
@@ -157,8 +155,7 @@ export async function transcribeMediaUrl({
   }
 
   if (head.contentLength !== null && head.contentLength <= MAX_OPENAI_UPLOAD_BYTES) {
-    const bytes = await downloadCappedBytes(fetchImpl, url, MAX_OPENAI_UPLOAD_BYTES, {
-      totalBytes,
+    const bytes = await downloadCappedMediaBytes(fetchImpl, url, remoteMediaMaxBytes, totalBytes, {
       onProgress: (downloadedBytes) =>
         progress?.onProgress?.({
           kind: "transcript-media-download-progress",
@@ -216,6 +213,7 @@ export async function transcribeMediaUrl({
   const tmpFile = join(tmpdir(), `summarize-podcast-${randomUUID()}.bin`);
   try {
     const downloadedBytes = await downloadToFile(fetchImpl, url, tmpFile, {
+      maxBytes: remoteMediaMaxBytes,
       totalBytes,
       onProgress: (nextDownloadedBytes) =>
         progress?.onProgress?.({
@@ -301,47 +299,92 @@ export async function downloadCappedBytes(
   fetchImpl: typeof fetch,
   url: string,
   maxBytes: number,
-  options?: { totalBytes: number | null; onProgress?: ((downloadedBytes: number) => void) | null },
+  options?: {
+    rejectAboveBytes?: number;
+    totalBytes: number | null;
+    onProgress?: ((downloadedBytes: number) => void) | null;
+  } | null,
 ): Promise<Uint8Array> {
+  const rejectAboveBytes = options?.rejectAboveBytes ?? null;
+  const retainBytes = Math.min(maxBytes, rejectAboveBytes ?? maxBytes);
   const res = await fetchImpl(url, {
     redirect: "follow",
-    headers: { Range: `bytes=0-${maxBytes - 1}` },
+    headers: { Range: `bytes=0-${retainBytes - 1}` },
     signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`Download failed (${res.status})`);
   }
+  const contentRange = parseContentRange(res.headers.get("content-range"));
+  const contentRangeTotal = contentRange?.total ?? null;
+  const contentLength =
+    res.status === 206 ? null : parseContentLength(res.headers.get("content-length"));
+  const getBoundedTotalBytes = contentRangeTotal ?? contentLength ?? null;
+  const declaredTotalBytes = options?.totalBytes ?? null;
+  const boundedTotalBytes = getBoundedTotalBytes ?? declaredTotalBytes;
+  if (
+    rejectAboveBytes !== null &&
+    boundedTotalBytes !== null &&
+    boundedTotalBytes > rejectAboveBytes
+  ) {
+    throw remoteMediaTooLargeError(boundedTotalBytes, rejectAboveBytes);
+  }
+  const declaredBodyBytes =
+    res.status === 206 && contentRange !== null ? contentRange.end - contentRange.start + 1 : null;
+  const verifyOverflowByReading =
+    rejectAboveBytes !== null &&
+    (boundedTotalBytes === null ||
+      (declaredBodyBytes !== null && declaredBodyBytes <= retainBytes) ||
+      (contentLength !== null && contentLength <= retainBytes) ||
+      (getBoundedTotalBytes === null &&
+        declaredTotalBytes !== null &&
+        declaredTotalBytes <= retainBytes) ||
+      (rejectAboveBytes <= maxBytes && boundedTotalBytes <= rejectAboveBytes));
   const body = res.body;
   if (!body) {
     const arrayBuffer = await res.arrayBuffer();
-    return new Uint8Array(arrayBuffer.slice(0, maxBytes));
+    if (verifyOverflowByReading && arrayBuffer.byteLength > rejectAboveBytes) {
+      throw remoteMediaTooLargeError(arrayBuffer.byteLength, rejectAboveBytes);
+    }
+    return new Uint8Array(arrayBuffer.slice(0, retainBytes));
   }
 
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
-  let total = 0;
+  let retained = 0;
+  let totalRead = 0;
   let lastReported = 0;
   try {
-    while (total < maxBytes) {
+    while (retained < retainBytes || verifyOverflowByReading) {
       const { value, done } = await reader.read();
       if (done) break;
-      if (!value) continue;
-      const remaining = maxBytes - total;
-      const next = value.byteLength > remaining ? value.slice(0, remaining) : value;
-      chunks.push(next);
-      total += next.byteLength;
-      if (total - lastReported >= 64 * 1024) {
-        lastReported = total;
-        options?.onProgress?.(total);
+      if (!value || value.byteLength === 0) continue;
+      const nextTotalRead = totalRead + value.byteLength;
+      if (declaredBodyBytes !== null && nextTotalRead > declaredBodyBytes) {
+        throw new Error("Download failed (range response exceeded declared length)");
       }
-      if (total >= maxBytes) break;
+      if (verifyOverflowByReading && nextTotalRead > rejectAboveBytes) {
+        throw remoteMediaTooLargeError(nextTotalRead, rejectAboveBytes);
+      }
+      if (retained < retainBytes) {
+        const remaining = retainBytes - retained;
+        const next = value.byteLength > remaining ? value.slice(0, remaining) : value;
+        chunks.push(next);
+        retained += next.byteLength;
+        if (retained - lastReported >= 64 * 1024) {
+          lastReported = retained;
+          options?.onProgress?.(retained);
+        }
+      }
+      totalRead = nextTotalRead;
+      if (retained >= retainBytes && !verifyOverflowByReading) break;
     }
   } finally {
     await reader.cancel().catch(() => {});
   }
-  options?.onProgress?.(total);
+  options?.onProgress?.(retained);
 
-  const out = new Uint8Array(total);
+  const out = new Uint8Array(retained);
   let offset = 0;
   for (const chunk of chunks) {
     out.set(chunk, offset);
@@ -350,11 +393,29 @@ export async function downloadCappedBytes(
   return out;
 }
 
+async function downloadCappedMediaBytes(
+  fetchImpl: typeof fetch,
+  url: string,
+  remoteMediaMaxBytes: number,
+  totalBytes: number | null,
+  options?: { onProgress?: ((downloadedBytes: number) => void) | null },
+): Promise<Uint8Array> {
+  return await downloadCappedBytes(fetchImpl, url, MAX_OPENAI_UPLOAD_BYTES, {
+    rejectAboveBytes: remoteMediaMaxBytes,
+    totalBytes,
+    onProgress: options?.onProgress,
+  });
+}
+
 export async function downloadToFile(
   fetchImpl: typeof fetch,
   url: string,
   filePath: string,
-  options?: { totalBytes: number | null; onProgress?: ((downloadedBytes: number) => void) | null },
+  options?: {
+    maxBytes?: number;
+    totalBytes: number | null;
+    onProgress?: ((downloadedBytes: number) => void) | null;
+  },
 ): Promise<number> {
   const res = await fetchImpl(url, {
     redirect: "follow",
@@ -363,9 +424,13 @@ export async function downloadToFile(
   if (!res.ok) {
     throw new Error(`Download failed (${res.status})`);
   }
+  const maxBytes = options?.maxBytes ?? Number.POSITIVE_INFINITY;
   const body = res.body;
   if (!body) {
     const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > maxBytes) {
+      throw remoteMediaTooLargeError(bytes.byteLength, maxBytes);
+    }
     await fs.writeFile(filePath, bytes);
     options?.onProgress?.(bytes.byteLength);
     return bytes.byteLength;
@@ -381,8 +446,12 @@ export async function downloadToFile(
         const { value, done } = await reader.read();
         if (done) break;
         if (!value) continue;
+        const nextDownloadedBytes = downloadedBytes + value.byteLength;
+        if (nextDownloadedBytes > maxBytes) {
+          throw remoteMediaTooLargeError(nextDownloadedBytes, maxBytes);
+        }
         await handle.write(value);
-        downloadedBytes += value.byteLength;
+        downloadedBytes = nextDownloadedBytes;
         if (downloadedBytes - lastReported >= 128 * 1024) {
           lastReported = downloadedBytes;
           options?.onProgress?.(downloadedBytes);
@@ -398,6 +467,12 @@ export async function downloadToFile(
   return downloadedBytes;
 }
 
+function remoteMediaTooLargeError(bytes: number, maxBytes: number): Error {
+  return new Error(
+    `Remote media too large (${formatBytes(bytes)}). Limit is ${formatBytes(maxBytes)}.`,
+  );
+}
+
 export function normalizeHeaderType(value: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
@@ -409,6 +484,32 @@ export function parseContentLength(value: string | null): number | null {
   if (!value) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+export function parseContentRangeTotal(value: string | null): number | null {
+  return parseContentRange(value)?.total ?? null;
+}
+
+function parseContentRange(
+  value: string | null,
+): { start: number; end: number; total: number } | null {
+  if (!value) return null;
+  const match = value.trim().match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
+  if (!match?.[1] || !match[2] || !match[3]) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    !Number.isSafeInteger(total) ||
+    start < 0 ||
+    end < start ||
+    total <= end
+  ) {
+    return null;
+  }
+  return { start, end, total };
 }
 
 export function filenameFromUrl(url: string): string | null {

@@ -16,6 +16,7 @@ export type TranscriptionConfig = {
   openaiApiKey: string | null;
   falApiKey: string | null;
   geminiModel: string | null;
+  remoteMediaMaxBytes: number | null;
 };
 
 type TranscriptionConfigInput = {
@@ -28,11 +29,23 @@ type TranscriptionConfigInput = {
   openaiApiKey?: string | null;
   falApiKey?: string | null;
   geminiModel?: string | null;
+  remoteMediaMaxBytes?: number | string | null;
 };
+
+export const REMOTE_MEDIA_MAX_BYTES_ENV = "SUMMARIZE_REMOTE_MEDIA_MAX_BYTES";
 
 function normalizeKey(raw: string | null | undefined): string | null {
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   return trimmed.length > 0 ? trimmed : null;
+}
+
+export function normalizeRemoteMediaMaxBytes(
+  raw: number | string | null | undefined,
+): number | null {
+  if (raw == null) return null;
+
+  const parsed = typeof raw === "number" ? raw : Number(raw.trim());
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function resolveTranscriptionConfig(input: TranscriptionConfigInput): TranscriptionConfig {
@@ -65,5 +78,10 @@ export function resolveTranscriptionConfig(input: TranscriptionConfigInput): Tra
       falApiKey: fromObject?.falApiKey ?? input.falApiKey,
     }),
     geminiModel: normalizeKey(fromObject?.geminiModel ?? input.geminiModel),
+    remoteMediaMaxBytes: normalizeRemoteMediaMaxBytes(
+      fromObject?.remoteMediaMaxBytes ??
+        input.remoteMediaMaxBytes ??
+        env?.[REMOTE_MEDIA_MAX_BYTES_ENV],
+    ),
   };
 }
