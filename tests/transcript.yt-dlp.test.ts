@@ -286,19 +286,23 @@ describe("yt-dlp transcript helper", () => {
     expect(sharedArgs).not.toContain("--audio-format");
   });
 
-  it("reuses cached slide video for diarization without another yt-dlp download", async () => {
+  it("downloads audio when the shared slide cache contains video only", async () => {
     const mediaCache = {
-      get: vi.fn(async () => ({
-        url: "https://youtu.be/dQw4w9WgXcQ#summarize-slides",
-        filePath: "/tmp/cached-video.mp4",
-        sizeBytes: 1024,
-        sha256: null,
-        mediaType: "video/mp4",
-        filename: "video.mp4",
-        createdAtMs: 1,
-        lastAccessAtMs: 1,
-        expiresAtMs: null,
-      })),
+      get: vi.fn(async ({ url }: { url: string }) =>
+        url.endsWith("#summarize-slides")
+          ? {
+              url,
+              filePath: "/tmp/cached-video.mp4",
+              sizeBytes: 1024,
+              sha256: null,
+              mediaType: "video/mp4",
+              filename: "video.mp4",
+              createdAtMs: 1,
+              lastAccessAtMs: 1,
+              expiresAtMs: null,
+            }
+          : null,
+      ),
       put: vi.fn(),
     };
     (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -320,10 +324,26 @@ describe("yt-dlp transcript helper", () => {
     });
 
     expect(result.text).toBe("Speaker A: Cached.");
+    expect(result.notes).toContain("shared slide video cache hit");
+    expect(mediaCache.get).toHaveBeenCalledWith({
+      url: "https://youtu.be/dQw4w9WgXcQ",
+    });
     expect(mediaCache.get).toHaveBeenCalledWith({
       url: "https://youtu.be/dQw4w9WgXcQ#summarize-slides",
     });
-    expect(spawnMock.mock.calls.some(([command]) => command === "/usr/bin/yt-dlp")).toBe(false);
+    const args = spawnMock.mock.calls.find(([command]) => command === "/usr/bin/yt-dlp")?.[1] ?? [];
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "-f",
+        expect.stringContaining("bestaudio"),
+        "-x",
+        "--audio-format",
+        "mp3",
+      ]),
+    );
+    expect(args).not.toContain(
+      "bestvideo[height<=720][vcodec^=avc1][ext=mp4]/bestvideo[height<=720][ext=mp4]/bestvideo[height<=720],bestaudio[vcodec=none]",
+    );
   });
 
   it("emits download progress events from yt-dlp output", async () => {

@@ -132,12 +132,18 @@ export const fetchTranscriptWithYtDlp = async ({
   const progress = typeof onProgress === "function" ? onProgress : null;
   const providerHint = startInfo.providerHint;
   const modelId = startInfo.modelId;
-  const mediaCacheKey = downloadVideo ? buildSharedVideoMediaCacheKey(url) : url;
+  const mediaCacheKey = url;
+  const sharedVideoMediaCacheKey = buildSharedVideoMediaCacheKey(url);
   const cachedMedia = localFileInput
     ? null
     : mediaCache
       ? await mediaCache.get({ url: mediaCacheKey })
       : null;
+  const cachedSharedVideo =
+    !localFileInput && downloadVideo && mediaCache
+      ? await mediaCache.get({ url: sharedVideoMediaCacheKey })
+      : null;
+  if (cachedSharedVideo?.filePath) notes.push("shared slide video cache hit");
 
   const outputFile = join(tmpdir(), `summarize-${randomUUID()}.mp3`);
   let filePath = localFileInput?.filePath ?? cachedMedia?.filePath ?? outputFile;
@@ -200,9 +206,10 @@ export const fetchTranscriptWithYtDlp = async ({
             });
           }
         : null;
-      const downloaded = downloadVideo
-        ? await downloadSlidesVideoAndAudio(ytDlpPath, url, extraArgs, onDownloadProgress)
-        : await downloadAudio(ytDlpPath, url, outputFile, extraArgs, onDownloadProgress);
+      const downloaded =
+        downloadVideo && !cachedSharedVideo?.filePath
+          ? await downloadSlidesVideoAndAudio(ytDlpPath, url, extraArgs, onDownloadProgress)
+          : await downloadAudio(ytDlpPath, url, outputFile, extraArgs, onDownloadProgress);
       filePath = downloaded.filePath;
       mediaType = downloaded.mediaType;
       filename = downloaded.filename;
@@ -219,7 +226,7 @@ export const fetchTranscriptWithYtDlp = async ({
 
       if (downloaded.sharedVideo && mediaCache) {
         const storedVideo = await mediaCache.put({
-          url: mediaCacheKey,
+          url: sharedVideoMediaCacheKey,
           filePath: downloaded.sharedVideo.filePath,
           mediaType: downloaded.sharedVideo.mediaType,
           filename: downloaded.sharedVideo.filename,
