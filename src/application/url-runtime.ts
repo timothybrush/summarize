@@ -3,8 +3,8 @@ import type { SummaryStreamHandler } from "../engine/events.js";
 import { executeAssetSummary } from "../run/flows/asset/summary.js";
 import type { UrlFlowContext } from "../run/flows/url/types.js";
 import { scopeTranscriptCacheForDiarization } from "../shared/transcript-diarization-cache-scope.js";
+import { createSummarizeModelResources } from "./execution-resources.js";
 import { createRunFlowContexts } from "./flow-contexts.js";
-import { createExecutableRunModel, createRunModelRuntime } from "./model-runtime.js";
 import { resolveSummarizeRun } from "./run-spec.js";
 import type {
   SummarizeEventSink,
@@ -59,31 +59,22 @@ export function createSummarizeUrlFlowContext(args: {
   const { extractOnly, slides } = request;
   const { env, fetch: fetchImpl, urlFetch: urlFetchImpl, cache, mediaCache, execFile } = runtime;
   const { spec, bindings } = resolveSummarizeRun({ request, env });
-  const { context: runContext, envForRun } = bindings;
+  const { envForRun } = bindings;
   const stdout = createEventWritable(emit, !extractOnly);
   const stderr = process.stderr;
 
-  const modelRuntime = createRunModelRuntime({
-    context: runContext,
+  const summaryStream = createEventSummaryStreamHandler(emit);
+  const modelResources = createSummarizeModelResources({
+    resolvedRun: { spec, bindings },
     env: envForRun,
-    envForRun,
     metricsEnv: envForRun,
     fetchImpl,
     execFileImpl: execFile,
-    maxOutputTokensArg: spec.maxOutputTokensArg,
-    timeoutMs: spec.timeoutMs,
-    retries: spec.retries,
     streamingEnabled: true,
-  });
-  const { metrics } = modelRuntime;
-  const summaryStream = createEventSummaryStreamHandler(emit);
-  const model = createExecutableRunModel({
-    spec: bindings.model,
-    runtime: modelRuntime,
-    context: runContext,
-    allowAutoCliFallback: spec.allowAutoCliFallback,
     summaryStream,
   });
+  const { metrics } = modelResources.runtime;
+  const { model } = modelResources;
 
   const urlCache = scopeTranscriptCacheForDiarization(cache, spec.transcriptDiarization);
   const io: UrlFlowContext["io"] = {

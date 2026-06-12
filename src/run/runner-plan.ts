@@ -1,6 +1,6 @@
 import type { Command } from "commander";
+import { createSummarizeModelResources } from "../application/execution-resources.js";
 import { createRunFlowContexts } from "../application/flow-contexts.js";
-import { createExecutableRunModel, createRunModelRuntime } from "../application/model-runtime.js";
 import { resolveSummarizeRun } from "../application/run-spec.js";
 import { type CacheState } from "../cache.js";
 import type { ExecFileFn } from "../markitdown.js";
@@ -275,27 +275,11 @@ export async function createRunnerPlan(options: {
     clearProgressIfCurrent,
   } = progressGate;
 
-  const modelRuntime = createRunModelRuntime({
-    context: runContext,
-    env,
-    envForRun,
-    metricsEnv: env,
-    fetchImpl,
-    execFileImpl,
-    maxOutputTokensArg: runSpec.maxOutputTokensArg,
-    timeoutMs: runSpec.timeoutMs,
-    retries: runSpec.retries,
-    streamingEnabled,
-    requestOptions: {
-      openaiRequestOptions,
-      openaiRequestOptionsOverride,
-      cliReasoningEffortOverride,
-    },
-    log: (message) => writeVerbose(stderr, verbose, message, verboseColor, envForRun),
-    trace: (name, detail) => perfTrace?.mark(name, detail),
-  });
-  const { apiStatus, metrics } = modelRuntime;
-  const { trackedFetch, buildReport, estimateCostUsd, setTranscriptionCost } = metrics;
+  const requestOptions = {
+    openaiRequestOptions,
+    openaiRequestOptionsOverride,
+    cliReasoningEffortOverride,
+  };
   const summaryStream = streamingEnabled
     ? createTerminalSummaryStream({
         stdout,
@@ -306,18 +290,21 @@ export async function createRunnerPlan(options: {
         restoreProgressAfterStdout,
       })
     : null;
-  const model = createExecutableRunModel({
-    spec: resolvedRun.bindings.model,
-    runtime: modelRuntime,
-    context: runContext,
-    allowAutoCliFallback: runSpec.allowAutoCliFallback,
+  const modelResources = createSummarizeModelResources({
+    resolvedRun,
+    env,
+    metricsEnv: env,
+    fetchImpl,
+    execFileImpl,
+    streamingEnabled,
     summaryStream,
-    requestOptions: {
-      openaiRequestOptions,
-      openaiRequestOptionsOverride,
-      cliReasoningEffortOverride,
-    },
+    requestOptions,
+    log: (message) => writeVerbose(stderr, verbose, message, verboseColor, envForRun),
+    trace: (name, detail) => perfTrace?.mark(name, detail),
   });
+  const { apiStatus, metrics } = modelResources.runtime;
+  const { trackedFetch, buildReport, estimateCostUsd, setTranscriptionCost } = metrics;
+  const { model } = modelResources;
 
   const writeViaFooter = (parts: string[]) => {
     if (json || extractMode) return;

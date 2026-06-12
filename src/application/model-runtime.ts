@@ -9,7 +9,7 @@ import { resolveModelSelection, type ModelSelection } from "./model-selection.js
 import { resolveDesiredOutputTokens } from "./output-policy.js";
 import { resolveProviderRuntimeBindings } from "./provider-runtime.js";
 
-type ModelExecutorRequestOptions = Pick<
+export type ModelExecutorRequestOptions = Pick<
   ModelExecutorDeps,
   "openaiRequestOptions" | "openaiRequestOptionsOverride" | "cliReasoningEffortOverride"
 >;
