@@ -1,4 +1,3 @@
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { isYouTubeVideoUrl, shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { defineBackground } from "wxt/utils/define-background";
 import { createBrowserPanelCacheStore } from "../lib/browser-panel-cache";
@@ -21,10 +20,10 @@ import {
   seekInTab,
 } from "./background/content-script-bridge";
 import { daemonHealth, daemonPing, friendlyFetchError } from "./background/daemon-client";
-import { ensureChatExtract, primeMediaHint, type CachedExtract } from "./background/extract-cache";
+import { primeMediaHint, type CachedExtract } from "./background/extract-cache";
 import { createHoverController, type HoverToBg } from "./background/hover-controller";
 import { bindBackgroundListeners } from "./background/listeners";
-import { handlePanelAgentRequest, handlePanelChatHistoryRequest } from "./background/panel-chat";
+import { createPanelChatRuntime } from "./background/panel-chat-runtime";
 import { createBackgroundPanelRuntime } from "./background/panel-runtime";
 import {
   handlePanelClosed,
@@ -36,7 +35,6 @@ import { createPanelSessionStore, type PanelSession } from "./background/panel-s
 import { handlePanelSlidesContextRequest } from "./background/panel-slides-context";
 import { type PanelUiState } from "./background/panel-state";
 import {
-  buildSlidesText,
   getActiveTab,
   openOptionsWindow,
   type SlidesPayload,
@@ -142,6 +140,18 @@ export default defineBackground(() => {
       transcribeYouTubeLocally:
         import.meta.env.BROWSER === "chrome" ? transcribeYoutubeAudioInTab : undefined,
     });
+  const panelChatRuntime = createPanelChatRuntime<BackgroundPanelSession>({
+    loadSettings,
+    getActiveTab,
+    canSummarizeUrl,
+    panelSessionStore,
+    send,
+    sendStatus,
+    extractFromTab,
+    fetchImpl: (...args) => fetch(...args),
+    logExtract,
+    friendlyFetchError,
+  });
 
   async function maybeStartBrowserSlides(
     session: BackgroundPanelSession,
@@ -378,190 +388,10 @@ export default defineBackground(() => {
         break;
       }
       case "panel:agent":
-        void (async () => {
-          const settings = await loadSettings();
-          if (!settings.chatEnabled) {
-            void send(session, { type: "run:error", message: "Chat is disabled in settings" });
-            return;
-          }
-          if (!settings.token.trim()) {
-            void send(session, { type: "run:error", message: "Setup required (missing token)" });
-            return;
-          }
-
-          const tab = await getActiveTab(session.windowId);
-          if (!tab?.id || !canSummarizeUrl(tab.url)) {
-            void send(session, { type: "run:error", message: "Cannot chat on this page" });
-            return;
-          }
-
-          const latestPanelCache = await panelSessionStore.getPanelCacheAsync(tab.id, tab.url);
-          const panelTranscript =
-            latestPanelCache?.transcriptTimedText ??
-            latestPanelCache?.slides?.transcriptTimedText ??
-            null;
-          const panelCacheText =
-            panelTranscript ??
-            latestPanelCache?.summaryMarkdown ??
-            tab.title ??
-            latestPanelCache?.url ??
-            tab.url;
-          let cachedExtract: CachedExtract;
-          try {
-            cachedExtract =
-              settings.slideRuntime === "browser" &&
-              latestPanelCache &&
-              (panelTranscript || latestPanelCache.slides)
-                ? {
-                    url: latestPanelCache.url,
-                    title: latestPanelCache.title,
-                    text: panelCacheText,
-                    source: "url",
-                    truncated: false,
-                    totalCharacters: panelCacheText.length,
-                    wordCount: panelCacheText.split(/\s+/).filter(Boolean).length,
-                    media: {
-                      hasVideo: true,
-                      hasAudio: true,
-                      hasCaptions: Boolean(panelTranscript),
-                    },
-                    transcriptSource: panelTranscript ? "browser" : null,
-                    transcriptionProvider: null,
-                    transcriptCharacters: panelTranscript?.length ?? null,
-                    transcriptWordCount:
-                      panelTranscript?.split(/\s+/).filter(Boolean).length ?? null,
-                    transcriptLines: panelTranscript?.split(/\r?\n/).filter(Boolean).length ?? null,
-                    transcriptTimedText: panelTranscript,
-                    mediaDurationSeconds: null,
-                    slides: latestPanelCache.slides,
-                    diagnostics: null,
-                  }
-                : await ensureChatExtract({
-                    session,
-                    tab,
-                    settings,
-                    panelSessionStore,
-                    sendStatus: (status) => sendStatus(session, status),
-                    extractFromTab,
-                    fetchImpl: fetch,
-                    log: logExtract(session.windowId),
-                  });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            void send(session, { type: "run:error", message });
-            sendStatus(session, `Error: ${message}`);
-            return;
-          }
-
-          const agentPayload = raw as {
-            requestId: string;
-            messages: Message[];
-            tools: string[];
-            summary?: string | null;
-          };
-          const cachedExtractWithPanelSlides =
-            latestPanelCache?.slides || latestPanelCache?.transcriptTimedText
-              ? {
-                  ...cachedExtract,
-                  slides: latestPanelCache.slides ?? cachedExtract.slides,
-                  transcriptTimedText:
-                    cachedExtract.transcriptTimedText ??
-                    latestPanelCache.transcriptTimedText ??
-                    null,
-                }
-              : cachedExtract;
-          const slidesContext = buildSlidesText(
-            cachedExtractWithPanelSlides.slides,
-            settings.slidesOcrEnabled,
-            settings.length,
-          );
-          await handlePanelAgentRequest({
-            session,
-            requestId: agentPayload.requestId,
-            messages: agentPayload.messages,
-            tools: agentPayload.tools,
-            summary: agentPayload.summary,
-            settings,
-            cachedExtract: cachedExtractWithPanelSlides,
-            slidesText: slidesContext,
-            send: (msg) => {
-              void send(session, msg as BgToPanel);
-            },
-            sendStatus: (status) => sendStatus(session, status),
-            fetchImpl: fetch,
-            friendlyFetchError,
-          });
-        })();
+        void panelChatRuntime.handleAgent(session, raw);
         break;
       case "panel:chat-history":
-        void (async () => {
-          const payload = raw as { requestId: string; summary?: string | null };
-          const settings = await loadSettings();
-          if (!settings.chatEnabled) {
-            void send(session, {
-              type: "chat:history",
-              requestId: payload.requestId,
-              ok: false,
-              error: "Chat is disabled in settings",
-            });
-            return;
-          }
-          if (!settings.token.trim()) {
-            void send(session, {
-              type: "chat:history",
-              requestId: payload.requestId,
-              ok: false,
-              error: "Setup required (missing token)",
-            });
-            return;
-          }
-
-          const tab = await getActiveTab(session.windowId);
-          if (!tab?.id || !canSummarizeUrl(tab.url)) {
-            void send(session, {
-              type: "chat:history",
-              requestId: payload.requestId,
-              ok: false,
-              error: "Cannot chat on this page",
-            });
-            return;
-          }
-
-          let cachedExtract: CachedExtract;
-          try {
-            cachedExtract = await ensureChatExtract({
-              session,
-              tab,
-              settings,
-              panelSessionStore,
-              sendStatus: () => {},
-              extractFromTab,
-              fetchImpl: fetch,
-              log: logExtract(session.windowId),
-            });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            void send(session, {
-              type: "chat:history",
-              requestId: payload.requestId,
-              ok: false,
-              error: message,
-            });
-            return;
-          }
-
-          await handlePanelChatHistoryRequest({
-            requestId: payload.requestId,
-            summary: payload.summary,
-            settings,
-            cachedExtract,
-            send: (msg) => {
-              void send(session, msg as BgToPanel);
-            },
-            fetchImpl: fetch,
-            friendlyFetchError,
-          });
-        })();
+        void panelChatRuntime.handleHistory(session, raw);
         break;
       case "panel:ping":
         void emitState(session, "", { checkRecovery: true });
