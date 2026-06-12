@@ -11,6 +11,10 @@ vi.mock("../apps/chrome-extension/src/entrypoints/sidepanel/bindings", () => ({
 }));
 
 import { bootstrapSidepanel } from "../apps/chrome-extension/src/entrypoints/sidepanel/bootstrap-runtime";
+import {
+  createInitialPanelState,
+  createPanelStateStore,
+} from "../apps/chrome-extension/src/entrypoints/sidepanel/panel-state-store";
 
 describe("sidepanel bootstrap runtime", () => {
   beforeEach(() => {
@@ -25,6 +29,9 @@ describe("sidepanel bootstrap runtime", () => {
 
   it("hydrates settings, binds lifecycle, and pings", async () => {
     const calls: string[] = [];
+    const initialState = createInitialPanelState();
+    initialState.panelSession.pendingSettingsSnapshot = { chatEnabled: true };
+    const panelStateStore = createPanelStateStore(initialState);
     const loadedSettings = {
       autoSummarize: true,
       chatEnabled: false,
@@ -42,21 +49,12 @@ describe("sidepanel bootstrap runtime", () => {
         calls.push("ensure");
       },
       loadSettings: async () => loadedSettings,
-      getPendingSettingsSnapshot: () => ({ chatEnabled: true }),
-      clearPendingSettingsSnapshot: () => {
-        calls.push("clear-pending");
-      },
-      setSettingsHydrated: (value) => {
-        calls.push(`hydrated:${value}`);
-      },
+      panelState: panelStateStore.state,
+      dispatchPanelState: panelStateStore.dispatch,
       typographyController: {
         setCurrentFontSize: (value) => calls.push(`font:${value}`),
         setCurrentLineHeight: (value) => calls.push(`line:${value}`),
       },
-      setAutoValue: (value) => calls.push(`auto:${value}`),
-      setChatEnabledValue: (value) => calls.push(`chat:${value}`),
-      setAutomationEnabledValue: (value) => calls.push(`automation:${value}`),
-      setSlidesLayoutValue: (value) => calls.push(`layout:${value}`),
       setSlidesLayoutInputValue: (value) => calls.push(`layout-input:${value}`),
       hideAutomationNotice: () => calls.push("hide-automation"),
       appearanceControls: {
@@ -75,7 +73,6 @@ describe("sidepanel bootstrap runtime", () => {
       sendReady: () => calls.push("ready"),
       scheduleAutoKick: () => calls.push("auto-kick"),
       sendPing: () => calls.push("ping"),
-      bindSettingsStorage: { getSettingsHydrated: () => true } as never,
       bindSidepanelLifecycle: { sendReady: () => {} } as never,
     });
 
@@ -85,13 +82,21 @@ describe("sidepanel bootstrap runtime", () => {
     expect(bindingSpies.bindSidepanelLifecycle).toHaveBeenCalledTimes(1);
     expect(calls).toContain("hide-automation");
     expect(calls).toContain("model-disabled:true");
-    expect(calls).toContain("chat:true");
     expect(calls).toContain("ready");
     expect(calls).toContain("ping");
+    expect(panelStateStore.state.panelSession).toMatchObject({
+      autoSummarize: true,
+      chatEnabled: true,
+      automationEnabled: false,
+      settingsHydrated: true,
+      pendingSettingsSnapshot: null,
+    });
+    expect(panelStateStore.state.slidesSession.slidesLayout).toBe("gallery");
   });
 
   it("uses loaded settings directly when there is no pending snapshot", async () => {
     const calls: string[] = [];
+    const panelStateStore = createPanelStateStore();
 
     bootstrapSidepanel({
       ensurePanelPort: async () => {
@@ -108,21 +113,12 @@ describe("sidepanel bootstrap runtime", () => {
         model: "openai/gpt-5.4",
         token: "abc123",
       }),
-      getPendingSettingsSnapshot: () => null,
-      clearPendingSettingsSnapshot: () => {
-        calls.push("clear-pending");
-      },
-      setSettingsHydrated: (value) => {
-        calls.push(`hydrated:${value}`);
-      },
+      panelState: panelStateStore.state,
+      dispatchPanelState: panelStateStore.dispatch,
       typographyController: {
         setCurrentFontSize: (value) => calls.push(`font:${value}`),
         setCurrentLineHeight: (value) => calls.push(`line:${value}`),
       },
-      setAutoValue: (value) => calls.push(`auto:${value}`),
-      setChatEnabledValue: (value) => calls.push(`chat:${value}`),
-      setAutomationEnabledValue: (value) => calls.push(`automation:${value}`),
-      setSlidesLayoutValue: (value) => calls.push(`layout:${value}`),
       setSlidesLayoutInputValue: (value) => calls.push(`layout-input:${value}`),
       hideAutomationNotice: () => calls.push("hide-automation"),
       appearanceControls: {
@@ -141,7 +137,6 @@ describe("sidepanel bootstrap runtime", () => {
       sendReady: () => calls.push("ready"),
       scheduleAutoKick: () => calls.push("auto-kick"),
       sendPing: () => calls.push("ping"),
-      bindSettingsStorage: { getSettingsHydrated: () => true } as never,
       bindSidepanelLifecycle: { sendReady: () => {} } as never,
     });
 
@@ -149,7 +144,13 @@ describe("sidepanel bootstrap runtime", () => {
 
     expect(calls).not.toContain("hide-automation");
     expect(calls).toContain("model-disabled:false");
-    expect(calls).toContain("chat:true");
-    expect(calls).toContain("layout:strip");
+    expect(panelStateStore.state.panelSession).toMatchObject({
+      autoSummarize: false,
+      chatEnabled: true,
+      automationEnabled: true,
+      settingsHydrated: true,
+      pendingSettingsSnapshot: null,
+    });
+    expect(panelStateStore.state.slidesSession.slidesLayout).toBe("strip");
   });
 });

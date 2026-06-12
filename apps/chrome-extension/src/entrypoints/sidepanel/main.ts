@@ -1877,26 +1877,9 @@ bindSidepanelUiEvents({
 bootstrapSidepanel({
   ensurePanelPort: () => panelPortRuntime.ensure(),
   loadSettings,
-  getPendingSettingsSnapshot: () => getPanelSession().pendingSettingsSnapshot,
-  clearPendingSettingsSnapshot: () => {
-    updatePanelSession({ pendingSettingsSnapshot: null });
-  },
-  setSettingsHydrated: (value) => {
-    updatePanelSession({ settingsHydrated: value });
-  },
+  panelState,
+  dispatchPanelState: panelStateStore.dispatch,
   typographyController,
-  setAutoValue: (value) => {
-    updatePanelSession({ autoSummarize: value });
-  },
-  setChatEnabledValue: (value) => {
-    updatePanelSession({ chatEnabled: value });
-  },
-  setAutomationEnabledValue: (value) => {
-    updatePanelSession({ automationEnabled: value });
-  },
-  setSlidesLayoutValue: (value) => {
-    updateSlidesState({ slidesLayout: value as SlidesLayout });
-  },
   setSlidesLayoutInputValue: (value) => {
     slidesLayoutEl.value = value;
   },
@@ -1923,21 +1906,6 @@ bootstrapSidepanel({
   scheduleAutoKick,
   sendPing: () => {
     void send({ type: "panel:ping" });
-  },
-  bindSettingsStorage: {
-    applyChatEnabled,
-    hideAutomationNotice,
-    getSettingsHydrated: () => getPanelSession().settingsHydrated,
-    setPendingSettingsSnapshot: (value) => {
-      updatePanelSession({ pendingSettingsSnapshot: value });
-    },
-    getPendingSettingsSnapshot: () => getPanelSession().pendingSettingsSnapshot,
-    setChatEnabledValue: (value) => {
-      updatePanelSession({ chatEnabled: value });
-    },
-    setAutomationEnabledValue: (value) => {
-      updatePanelSession({ automationEnabled: value });
-    },
   },
   bindSidepanelLifecycle: {
     sendReady: () => {

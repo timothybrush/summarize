@@ -1,4 +1,6 @@
 import type { Settings, SlidesLayout } from "../../lib/settings";
+import { applyPanelStateAction, type PanelStateAction } from "./panel-state-store";
+import type { PanelState } from "./types";
 
 export function bindSidepanelUiEvents({
   refreshBtn,
@@ -184,41 +186,54 @@ export function bindSidepanelLifecycle({
 }
 
 export function bindSettingsStorage({
+  panelState,
+  dispatchPanelState,
   applyChatEnabled,
   hideAutomationNotice,
-  getSettingsHydrated,
-  setPendingSettingsSnapshot,
-  getPendingSettingsSnapshot,
-  setChatEnabledValue,
-  setAutomationEnabledValue,
 }: {
+  panelState: PanelState;
+  dispatchPanelState?: (action: PanelStateAction) => void;
   applyChatEnabled: () => void;
   hideAutomationNotice: () => void;
-  getSettingsHydrated: () => boolean;
-  setPendingSettingsSnapshot: (value: Partial<Settings> | null) => void;
-  getPendingSettingsSnapshot: () => Partial<Settings> | null;
-  setChatEnabledValue: (value: boolean) => void;
-  setAutomationEnabledValue: (value: boolean) => void;
 }) {
+  const dispatch = (action: PanelStateAction) => {
+    if (dispatchPanelState) {
+      dispatchPanelState(action);
+    } else {
+      applyPanelStateAction(panelState, action);
+    }
+  };
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const nextSettings = changes.settings?.newValue;
     if (!nextSettings || typeof nextSettings !== "object") return;
-    if (!getSettingsHydrated()) {
-      setPendingSettingsSnapshot({
-        ...(getPendingSettingsSnapshot() ?? {}),
-        ...(nextSettings as Partial<Settings>),
+    if (!panelState.panelSession.settingsHydrated) {
+      dispatch({
+        type: "panel-session-update",
+        value: {
+          pendingSettingsSnapshot: {
+            ...(panelState.panelSession.pendingSettingsSnapshot ?? {}),
+            ...(nextSettings as Partial<Settings>),
+          },
+        },
       });
     }
     const nextChatEnabled = (nextSettings as { chatEnabled?: unknown }).chatEnabled;
     if (typeof nextChatEnabled === "boolean") {
-      setChatEnabledValue(nextChatEnabled);
+      dispatch({
+        type: "panel-session-update",
+        value: { chatEnabled: nextChatEnabled },
+      });
       applyChatEnabled();
     }
     const nextAutomationEnabled = (nextSettings as { automationEnabled?: unknown })
       .automationEnabled;
     if (typeof nextAutomationEnabled === "boolean") {
-      setAutomationEnabledValue(nextAutomationEnabled);
+      dispatch({
+        type: "panel-session-update",
+        value: { automationEnabled: nextAutomationEnabled },
+      });
       if (!nextAutomationEnabled) hideAutomationNotice();
     }
   });

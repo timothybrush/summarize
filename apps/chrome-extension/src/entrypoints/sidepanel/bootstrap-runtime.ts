@@ -1,31 +1,44 @@
+import type { Settings } from "../../lib/settings";
 import { bindSettingsStorage, bindSidepanelLifecycle } from "./bindings";
+import { applyPanelStateAction, type PanelStateAction } from "./panel-state-store";
+import type { PanelState } from "./types";
 
-type LoadedSettings = {
-  autoSummarize: boolean;
-  chatEnabled: boolean;
-  automationEnabled: boolean;
-  slidesLayout: string;
-  fontSize: number;
-  lineHeight: number;
-  fontFamily: string;
-  model: string;
-  token: string;
-};
+type LoadedSettings = Pick<
+  Settings,
+  | "autoSummarize"
+  | "chatEnabled"
+  | "automationEnabled"
+  | "slidesLayout"
+  | "fontSize"
+  | "lineHeight"
+  | "fontFamily"
+  | "model"
+  | "token"
+>;
+
+function dispatchPanelState(
+  options: {
+    panelState: PanelState;
+    dispatchPanelState?: (action: PanelStateAction) => void;
+  },
+  action: PanelStateAction,
+) {
+  if (options.dispatchPanelState) {
+    options.dispatchPanelState(action);
+  } else {
+    applyPanelStateAction(options.panelState, action);
+  }
+}
 
 export function bootstrapSidepanel(options: {
   ensurePanelPort: () => Promise<void>;
   loadSettings: () => Promise<LoadedSettings>;
-  getPendingSettingsSnapshot: () => Partial<LoadedSettings> | null;
-  clearPendingSettingsSnapshot: () => void;
-  setSettingsHydrated: (value: boolean) => void;
+  panelState: PanelState;
+  dispatchPanelState?: (action: PanelStateAction) => void;
   typographyController: {
     setCurrentFontSize: (value: number) => void;
     setCurrentLineHeight: (value: number) => void;
   };
-  setAutoValue: (value: boolean) => void;
-  setChatEnabledValue: (value: boolean) => void;
-  setAutomationEnabledValue: (value: boolean) => void;
-  setSlidesLayoutValue: (value: string) => void;
   setSlidesLayoutInputValue: (value: string) => void;
   hideAutomationNotice: () => void;
   appearanceControls: {
@@ -44,24 +57,36 @@ export function bootstrapSidepanel(options: {
   sendReady: () => void;
   scheduleAutoKick: () => void;
   sendPing: () => void;
-  bindSettingsStorage: Parameters<typeof bindSettingsStorage>[0];
   bindSidepanelLifecycle: Parameters<typeof bindSidepanelLifecycle>[0];
 }) {
   void (async () => {
     await options.ensurePanelPort();
     const loadedSettings = await options.loadSettings();
-    const pendingSettingsSnapshot = options.getPendingSettingsSnapshot();
+    const pendingSettingsSnapshot = options.panelState.panelSession.pendingSettingsSnapshot;
     const settings = pendingSettingsSnapshot
       ? { ...loadedSettings, ...pendingSettingsSnapshot }
       : loadedSettings;
-    options.clearPendingSettingsSnapshot();
-    options.setSettingsHydrated(true);
+    dispatchPanelState(options, {
+      type: "panel-session-update",
+      value: {
+        pendingSettingsSnapshot: null,
+        settingsHydrated: true,
+      },
+    });
     options.typographyController.setCurrentFontSize(settings.fontSize);
     options.typographyController.setCurrentLineHeight(settings.lineHeight);
-    options.setAutoValue(settings.autoSummarize);
-    options.setChatEnabledValue(settings.chatEnabled);
-    options.setAutomationEnabledValue(settings.automationEnabled);
-    options.setSlidesLayoutValue(settings.slidesLayout);
+    dispatchPanelState(options, {
+      type: "panel-session-update",
+      value: {
+        autoSummarize: settings.autoSummarize,
+        chatEnabled: settings.chatEnabled,
+        automationEnabled: settings.automationEnabled,
+      },
+    });
+    dispatchPanelState(options, {
+      type: "slides-session-update",
+      value: { slidesLayout: settings.slidesLayout },
+    });
     options.setSlidesLayoutInputValue(settings.slidesLayout);
     if (!settings.automationEnabled) options.hideAutomationNotice();
     options.appearanceControls.setAutoValue(settings.autoSummarize);
@@ -83,6 +108,11 @@ export function bootstrapSidepanel(options: {
     options.sendPing();
   }, 25_000);
 
-  bindSettingsStorage(options.bindSettingsStorage);
+  bindSettingsStorage({
+    panelState: options.panelState,
+    dispatchPanelState: options.dispatchPanelState,
+    applyChatEnabled: options.applyChatEnabled,
+    hideAutomationNotice: options.hideAutomationNotice,
+  });
   bindSidepanelLifecycle(options.bindSidepanelLifecycle);
 }
