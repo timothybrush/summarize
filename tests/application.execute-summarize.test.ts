@@ -6,9 +6,14 @@ import type { UrlFlowContext } from "../src/run/flows/url/types.js";
 import { createEmptyRunOverrides } from "../src/run/run-settings.js";
 
 const mocks = vi.hoisted(() => ({
+  executeAssetSummary: vi.fn(),
   executeUrlFlow: vi.fn(),
 }));
 
+vi.mock("../src/run/flows/asset/summary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/run/flows/asset/summary.js")>()),
+  executeAssetSummary: mocks.executeAssetSummary,
+}));
 vi.mock("../src/run/flows/url/flow.js", () => ({
   executeUrlFlow: mocks.executeUrlFlow,
 }));
@@ -227,5 +232,124 @@ describe("executeSummarize", () => {
     expect(adapterModel).toHaveBeenCalledWith("google/gemini-2.5-pro");
     expect(eventTypes).toContain("model-selected");
     expect(eventTypes.at(-1)).toBe("run-completed");
+  });
+
+  it("executes resolved assets with byte-free results and semantic events", async () => {
+    mocks.executeAssetSummary.mockImplementationOnce(async (ctx, args) => {
+      ctx.onSummaryCached?.(true);
+      args.onModelChosen?.("openai/gpt-5.4");
+      return {
+        kind: "summary",
+        outcome: "model",
+        summary: "Asset summary.",
+        summaryEmitted: false,
+        summaryFromCache: true,
+        prompt: "Prompt",
+        extracted: {
+          kind: "asset",
+          source: args.sourceLabel,
+          mediaType: args.attachment.mediaType,
+          filename: args.attachment.filename,
+        },
+        footerParts: [],
+        llm: {
+          provider: "openai",
+          model: "openai/gpt-5.4",
+          maxCompletionTokens: 256,
+          strategy: "single",
+        },
+      };
+    });
+    const assetSummaryContext = {
+      onSummaryCached: null,
+      buildReport: vi.fn(async () => ({
+        llm: [],
+        services: { firecrawl: { requests: 0 }, apify: { requests: 0 } },
+      })),
+      estimateCostUsd: vi.fn(async () => 0.01),
+    };
+    const preparedContext = {
+      model: { requestedModelLabel: "openai/gpt-5.4" },
+      hooks: {
+        onModelChosen: null,
+        onExtracted: null,
+        onSlidesExtracted: null,
+        onSlidesProgress: null,
+        onSlidesDone: null,
+        onSlideChunk: undefined,
+        onLinkPreviewProgress: null,
+        onSummaryCached: null,
+        summarizeAsset: vi.fn(),
+      },
+    } as unknown as UrlFlowContext;
+    const attachment = {
+      kind: "file" as const,
+      mediaType: "text/plain",
+      filename: "notes.txt",
+      bytes: new TextEncoder().encode("Notes"),
+    };
+    const events: Array<{ type: string; text?: string }> = [];
+
+    const result = await executeSummarize(
+      {
+        input: {
+          kind: "resolved-asset",
+          sourceKind: "file",
+          sourceLabel: "/tmp/notes.txt",
+          attachment,
+        },
+        modelOverride: "openai/gpt-5.4",
+        promptOverride: null,
+        lengthRaw: "long",
+        languageRaw: "auto",
+        format: "text",
+        overrides: createEmptyRunOverrides(),
+        extractOnly: false,
+        slides: null,
+      },
+      {
+        runId: "asset-run",
+        env: {},
+        fetch: globalThis.fetch,
+        execFile: execFile as unknown as ExecFileFn,
+        cache: { mode: "bypass", store: null, ttlMs: 0, maxBytes: 0, path: null },
+        mediaCache: null,
+        now: () => 100,
+      },
+      (event) => {
+        events.push({
+          type: event.type,
+          ...(event.type === "summary-delta" ? { text: event.text } : {}),
+        });
+      },
+      {
+        urlFlowContext: preparedContext,
+        assetSummaryContext: assetSummaryContext as never,
+      },
+    );
+
+    expect(result).toMatchObject({
+      kind: "asset-summary",
+      input: {
+        kind: "asset",
+        sourceKind: "file",
+        source: "/tmp/notes.txt",
+        mediaType: "text/plain",
+        filename: "notes.txt",
+      },
+      summary: "Asset summary.",
+      usedModel: "openai/gpt-5.4",
+      summaryFromCache: true,
+      costUsd: 0.01,
+    });
+    expect(result.input).not.toHaveProperty("attachment");
+    expect(events).toEqual([
+      { type: "run-started" },
+      { type: "summary-started" },
+      { type: "summary-cache" },
+      { type: "model-selected" },
+      { type: "summary-delta", text: "Asset summary.\n" },
+      { type: "run-completed" },
+    ]);
   });
 });

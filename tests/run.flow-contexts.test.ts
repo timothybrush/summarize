@@ -99,6 +99,7 @@ describe("run flow contexts", () => {
   });
 
   it("keeps media-file handling in the CLI adapter", async () => {
+    const summarizeAssetImpl = vi.fn(async () => ({}) as never);
     const summarizeMediaFileImpl = vi.fn(async () => {});
     const assetSummaryContext = {
       env: {},
@@ -107,6 +108,7 @@ describe("run flow contexts", () => {
       timeoutMs: 1_000,
     } as unknown as AssetSummaryContext;
     const inputContext = createRunnerAssetInputContext({
+      summarizeAssetImpl,
       summarizeMediaFileImpl,
       assetSummaryContext,
       progressEnabled: true,
@@ -126,8 +128,10 @@ describe("run flow contexts", () => {
     };
 
     await inputContext.summarizeMediaFile?.(args);
+    await inputContext.summarizeAsset(args);
 
     expect(summarizeMediaFileImpl).toHaveBeenCalledWith(assetSummaryContext, args);
+    expect(summarizeAssetImpl).toHaveBeenCalledWith(args);
     expect(inputContext.progressEnabled).toBe(true);
   });
 });

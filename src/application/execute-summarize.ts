@@ -2,6 +2,7 @@ import { isYouTubeUrl } from "../content/index.js";
 import type { ExtractedLinkContent } from "../content/index.js";
 import { buildUrlPrompt } from "../engine/web-prompt.js";
 import { resolveUrlSummaryExecution, type UrlSummaryResolution } from "../engine/web-summary.js";
+import { executeAssetSummary } from "../run/flows/asset/summary.js";
 import { executeUrlFlow } from "../run/flows/url/flow.js";
 import type { UrlFlowContext } from "../run/flows/url/types.js";
 import {
@@ -13,6 +14,7 @@ import {
   type PreparedSummarizeExecution,
 } from "./execution-resources.js";
 import type {
+  AssetSummaryExecutionResult,
   ExtractionResult,
   SummarizeEvent,
   SummarizeEventSink,
@@ -196,8 +198,45 @@ export async function executeSummarize(
       throw new Error("Extract-only execution requires a URL input");
     }
 
-    const ctx = prepared
-      ? bindSummarizeExecutionEvents(prepared, emit).urlFlowContext
+    const boundPrepared = prepared ? bindSummarizeExecutionEvents(prepared, emit) : null;
+    if (request.input.kind === "resolved-asset") {
+      const assetSummaryContext = boundPrepared?.assetSummaryContext;
+      if (!assetSummaryContext) {
+        throw new Error("Resolved asset execution requires prepared asset resources");
+      }
+      emit({ type: "summary-started" });
+      const assetResult = await executeAssetSummary(assetSummaryContext, {
+        sourceKind: request.input.sourceKind,
+        sourceLabel: request.input.sourceLabel,
+        attachment: request.input.attachment,
+        onModelChosen: (modelId) => emit({ type: "model-selected", modelId }),
+      });
+      if (!assetResult.summaryEmitted) {
+        emitNormalizedSummary(assetResult.summary, emit);
+      }
+      const result: AssetSummaryExecutionResult = {
+        kind: "asset-summary",
+        input: {
+          kind: "asset",
+          sourceKind: request.input.sourceKind,
+          source: request.input.sourceLabel,
+          mediaType: request.input.attachment.mediaType,
+          filename: request.input.attachment.filename,
+        },
+        summary: assetResult.summary,
+        usedModel: usedModel ?? assetResult.llm?.model ?? null,
+        summaryFromCache: assetResult.summaryFromCache,
+        elapsedMs: now() - startedAt,
+        report: await assetSummaryContext.buildReport(),
+        costUsd: await assetSummaryContext.estimateCostUsd(),
+        details: assetResult,
+      };
+      emit({ type: "run-completed", result });
+      return result;
+    }
+
+    const ctx = boundPrepared
+      ? boundPrepared.urlFlowContext
       : createSummarizeUrlFlowContext({
           request,
           runtime,

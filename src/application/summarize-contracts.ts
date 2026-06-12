@@ -1,4 +1,5 @@
 import type { CacheState } from "../cache.js";
+import type { AssetAttachment } from "../content/asset.js";
 import type {
   ExtractedLinkContent,
   LinkPreviewProgressEvent,
@@ -6,6 +7,7 @@ import type {
 } from "../content/index.js";
 import type { RunMetricsReport } from "../costs.js";
 import type { ExecFileFn } from "../markitdown.js";
+import type { AssetSummaryResult } from "../run/flows/asset/types.js";
 import type { RunOverrides } from "../run/run-settings.js";
 import type {
   SlideExtractionResult,
@@ -28,6 +30,12 @@ export type SummarizeInput =
       url: string;
       title: string | null;
       maxCharacters: number | null;
+    }
+  | {
+      kind: "resolved-asset";
+      sourceKind: "file" | "asset-url";
+      sourceLabel: string;
+      attachment: AssetAttachment;
     };
 
 export type SummarizeRequest = {
@@ -81,9 +89,11 @@ export type SummarizeEvent =
 
 export type SummarizeEventSink = (event: SummarizeEvent) => void;
 
+export type UrlSummarizeInput = Exclude<SummarizeInput, { kind: "resolved-asset" }>;
+
 export type SummaryResult = {
   kind: "summary";
-  input: SummarizeInput;
+  input: UrlSummarizeInput;
   summary: string;
   usedModel: string;
   extracted: ExtractedLinkContent;
@@ -103,4 +113,22 @@ export type ExtractionResult = {
   details: SummarizeExtractionDetails;
 };
 
-export type SummarizeResult = SummaryResult | ExtractionResult;
+export type AssetSummaryExecutionResult = {
+  kind: "asset-summary";
+  input: {
+    kind: "asset";
+    sourceKind: "file" | "asset-url";
+    source: string;
+    mediaType: string;
+    filename: string | null;
+  };
+  summary: string;
+  usedModel: string | null;
+  summaryFromCache: boolean;
+  elapsedMs: number;
+  report: RunMetricsReport;
+  costUsd: number | null;
+  details: AssetSummaryResult;
+};
+
+export type SummarizeResult = SummaryResult | ExtractionResult | AssetSummaryExecutionResult;

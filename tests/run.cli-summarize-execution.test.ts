@@ -7,6 +7,7 @@ import type { SlideSettings } from "../src/slides/index.js";
 const mocks = vi.hoisted(() => ({
   executeSummarize: vi.fn(),
   presentCliSummarizeResult: vi.fn(),
+  presentAssetSummary: vi.fn(),
 }));
 
 vi.mock("../src/application/execute-summarize.js", () => ({
@@ -15,8 +16,14 @@ vi.mock("../src/application/execute-summarize.js", () => ({
 vi.mock("../src/run/cli-summarize-output.js", () => ({
   presentCliSummarizeResult: mocks.presentCliSummarizeResult,
 }));
+vi.mock("../src/run/flows/asset/summary.js", () => ({
+  presentAssetSummary: mocks.presentAssetSummary,
+}));
 
-import { createCliUrlSummaryExecutor } from "../src/run/cli-summarize-execution.js";
+import {
+  createCliResolvedAssetExecutor,
+  createCliUrlSummaryExecutor,
+} from "../src/run/cli-summarize-execution.js";
 
 describe("CLI summarize execution", () => {
   it("adapts planned inputs to URL application execution and presentation", async () => {
@@ -85,5 +92,66 @@ describe("CLI summarize execution", () => {
       { urlFlowContext: ctx, isYoutubeUrl: true },
     );
     expect(mocks.presentCliSummarizeResult).toHaveBeenCalledWith({ ctx, result });
+  });
+
+  it("executes resolved assets through the application and preserves CLI presentation", async () => {
+    const details = { kind: "summary", summary: "Asset summary" };
+    mocks.executeSummarize.mockImplementation(async (_request, _runtime, events) => {
+      events?.({ type: "model-selected", modelId: "openai/gpt-5.4" });
+      return {
+        kind: "asset-summary",
+        details,
+      };
+    });
+    const runtime = {} as SummarizeRuntime;
+    const presentationContext = {} as never;
+    const prepared = { urlFlowContext: {} as UrlFlowContext };
+    const execute = createCliResolvedAssetExecutor({
+      baseRequest: {
+        input: { kind: "file", filePath: "/tmp/input.txt" },
+        modelOverride: null,
+        promptOverride: null,
+        lengthRaw: null,
+        languageRaw: null,
+        format: "text",
+        overrides: createEmptyRunOverrides(),
+        extractOnly: false,
+        slides: null,
+      },
+      runtime,
+      prepared,
+      presentationContext,
+    });
+    const args = {
+      sourceKind: "file" as const,
+      sourceLabel: "/tmp/input.txt",
+      attachment: {
+        kind: "file" as const,
+        mediaType: "text/plain",
+        filename: "input.txt",
+        bytes: new TextEncoder().encode("Input"),
+      },
+      onModelChosen: vi.fn(),
+    };
+
+    const result = await execute(args);
+
+    expect(mocks.executeSummarize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: {
+          kind: "resolved-asset",
+          sourceKind: "file",
+          sourceLabel: "/tmp/input.txt",
+          attachment: args.attachment,
+        },
+        slides: null,
+      }),
+      runtime,
+      expect.any(Function),
+      prepared,
+    );
+    expect(args.onModelChosen).toHaveBeenCalledWith("openai/gpt-5.4");
+    expect(mocks.presentAssetSummary).toHaveBeenCalledWith(presentationContext, args, details);
+    expect(result).toBe(details);
   });
 });

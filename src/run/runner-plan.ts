@@ -10,7 +10,10 @@ import {
   resolveTrueColor,
 } from "../tty/theme.js";
 import { createCacheStateFromConfig } from "./cache-state.js";
-import { createCliUrlSummaryExecutor } from "./cli-summarize-execution.js";
+import {
+  createCliResolvedAssetExecutor,
+  createCliUrlSummaryExecutor,
+} from "./cli-summarize-execution.js";
 import { createCliSummarizeResolution } from "./cli-summarize-request.js";
 import { parseCliProviderArg } from "./env.js";
 import { isPdfExtension, isTranscribableExtension } from "./flows/asset/input.js";
@@ -337,20 +340,28 @@ export async function createRunnerPlan(options: {
   const { apiStatus, metrics } = executionResources.modelResources.runtime;
   const { trackedFetch, buildReport, estimateCostUsd } = metrics;
   const { summarizeAsset, assetSummaryContext, urlFlowContext } = executionResources;
+  const summarizeRuntime = {
+    runId: `cli-${runStartedAtMs}`,
+    env,
+    fetch: fetchImpl,
+    execFile: execFileImpl,
+    cache: executionResources.cacheState,
+    mediaCache,
+  };
   const executeUrlSummary = createCliUrlSummaryExecutor({
     baseRequest: summarizeResolution.request,
-    runtime: {
-      runId: `cli-${runStartedAtMs}`,
-      env,
-      fetch: fetchImpl,
-      execFile: execFileImpl,
-      cache: executionResources.cacheState,
-      mediaCache,
-    },
+    runtime: summarizeRuntime,
     slides: slidesSettings,
     maxExtractCharacters: extractMode ? maxExtractCharacters : null,
   });
+  const executeResolvedAsset = createCliResolvedAssetExecutor({
+    baseRequest: summarizeResolution.request,
+    runtime: summarizeRuntime,
+    prepared: executionResources,
+    presentationContext: assetSummaryContext,
+  });
   const assetInputContext = createRunnerAssetInputContext({
+    summarizeAssetImpl: executeResolvedAsset,
     summarizeMediaFileImpl,
     assetSummaryContext,
     progressEnabled,

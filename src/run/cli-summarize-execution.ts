@@ -1,8 +1,15 @@
 import { executeSummarize } from "../application/execute-summarize.js";
+import type { PreparedSummarizeExecution } from "../application/execution-resources.js";
 import type { SummarizeRunRequest } from "../application/run-spec.js";
 import type { SummarizeRequest, SummarizeRuntime } from "../application/summarize-contracts.js";
 import type { SlideSettings } from "../slides/index.js";
 import { presentCliSummarizeResult } from "./cli-summarize-output.js";
+import { presentAssetSummary } from "./flows/asset/summary.js";
+import type {
+  AssetSummaryContext,
+  AssetSummaryResult,
+  SummarizeAssetArgs,
+} from "./flows/asset/types.js";
 import type { UrlFlowContext } from "./flows/url/types.js";
 
 export type CliUrlSummaryExecutor = (options: {
@@ -37,5 +44,44 @@ export function createCliUrlSummaryExecutor(options: {
       isYoutubeUrl,
     });
     await presentCliSummarizeResult({ ctx, result });
+  };
+}
+
+export function createCliResolvedAssetExecutor(options: {
+  baseRequest: SummarizeRunRequest;
+  runtime: SummarizeRuntime;
+  prepared: PreparedSummarizeExecution;
+  presentationContext: AssetSummaryContext;
+}): (args: SummarizeAssetArgs) => Promise<AssetSummaryResult> {
+  const { input, slides, ...requestDefaults } = options.baseRequest;
+  void input;
+  void slides;
+
+  return async (args) => {
+    const request: SummarizeRequest = {
+      ...requestDefaults,
+      input: {
+        kind: "resolved-asset",
+        sourceKind: args.sourceKind,
+        sourceLabel: args.sourceLabel,
+        attachment: args.attachment,
+      },
+      slides: null,
+    };
+    const result = await executeSummarize(
+      request,
+      options.runtime,
+      (event) => {
+        if (event.type === "model-selected") {
+          args.onModelChosen?.(event.modelId);
+        }
+      },
+      options.prepared,
+    );
+    if (result.kind !== "asset-summary") {
+      throw new Error("CLI asset execution requires an asset summary result");
+    }
+    await presentAssetSummary(options.presentationContext, args, result.details);
+    return result.details;
   };
 }
