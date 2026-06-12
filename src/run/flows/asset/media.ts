@@ -20,7 +20,20 @@ import { resolveTwitterCookies } from "../../cookies/twitter.js";
 import { hasBirdCli, hasXurlCli } from "../../env.js";
 import { writeVerbose } from "../../logging.js";
 import { MAX_LOCAL_MEDIA_BYTES, MAX_LOCAL_MEDIA_LABEL } from "./media-policy.js";
-import type { AssetSummaryContext, SummarizeAssetArgs } from "./types.js";
+import { executeAssetSummary, presentAssetSummary } from "./summary.js";
+import type { AssetSummaryContext, AssetSummaryResult, SummarizeAssetArgs } from "./types.js";
+
+export type MediaFileExecutionResult =
+  | {
+      kind: "extraction";
+      extracted: ExtractedLinkContent;
+    }
+  | {
+      kind: "summary";
+      extracted: ExtractedLinkContent;
+      summaryArgs: SummarizeAssetArgs;
+      summary: AssetSummaryResult;
+    };
 
 /**
  * Get file modification time for cache invalidation support.
@@ -54,10 +67,10 @@ function getFileModificationTime(filePath: string): number | null {
  * - Captures file modification time for cache invalidation
  * - Passes fileMtime to transcript cache for local file support
  */
-export async function summarizeMediaFile(
+export async function executeMediaFile(
   ctx: AssetSummaryContext,
   args: SummarizeAssetArgs,
-): Promise<void> {
+): Promise<MediaFileExecutionResult> {
   // Check if basic transcription setup is available
   const groqKey = ctx.env.GROQ_API_KEY ?? ctx.apiStatus.groqApiKey;
   const geminiKey =
@@ -332,24 +345,18 @@ See: https://github.com/openai/whisper for setup details`);
       ctx.envForRun,
     );
 
-    // If extract mode, output the transcript directly without LLM summarization
     if (ctx.extractMode) {
-      ctx.clearProgressForStdout();
-      ctx.stdout.write(extracted.content);
-      if (!extracted.content.endsWith("\n")) {
-        ctx.stdout.write("\n");
-      }
-      return;
+      return { kind: "extraction", extracted };
     }
 
-    // Call the standard asset summarization with the transcript
-    const { summarizeAsset } = await import("./summary.js");
-    await summarizeAsset(ctx, {
+    const summaryArgs: SummarizeAssetArgs = {
       sourceKind: "file",
       sourceLabel: `${args.sourceLabel} (transcript)`,
       attachment: transcriptAttachment,
       onModelChosen: args.onModelChosen,
-    });
+    };
+    const summary = await executeAssetSummary(ctx, summaryArgs);
+    return { kind: "summary", extracted, summaryArgs, summary };
   } catch (error) {
     if (error instanceof SpeakerIdentificationError) {
       throw error;
@@ -362,4 +369,27 @@ See: https://github.com/openai/whisper for setup details`);
       `Transcription failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+export async function presentMediaFileResult(
+  ctx: AssetSummaryContext,
+  result: MediaFileExecutionResult,
+): Promise<void> {
+  if (result.kind === "summary") {
+    await presentAssetSummary(ctx, result.summaryArgs, result.summary);
+    return;
+  }
+  ctx.clearProgressForStdout();
+  ctx.stdout.write(result.extracted.content);
+  if (!result.extracted.content.endsWith("\n")) {
+    ctx.stdout.write("\n");
+  }
+}
+
+export async function summarizeMediaFile(
+  ctx: AssetSummaryContext,
+  args: SummarizeAssetArgs,
+): Promise<void> {
+  const result = await executeMediaFile(ctx, args);
+  await presentMediaFileResult(ctx, result);
 }

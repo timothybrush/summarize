@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { CacheStore } from "../src/cache.js";
-import { summarizeMediaFile } from "../src/run/flows/asset/media.js";
+import type { ExtractedLinkContent } from "../src/content/index.js";
+import { executeMediaFile, summarizeMediaFile } from "../src/run/flows/asset/media.js";
 import type { AssetSummaryContext } from "../src/run/flows/asset/types.js";
 
 const createLinkPreviewClient = vi.hoisted(() => vi.fn());
@@ -61,6 +62,55 @@ function makeContext(overrides: Partial<AssetSummaryContext>): AssetSummaryConte
 }
 
 describe("summarizeMediaFile options", () => {
+  it("returns extracted transcripts without presenting them", async () => {
+    createLinkPreviewClient.mockReset();
+    const root = mkdtempSync(join(tmpdir(), "summarize-media-execution-"));
+    const audioPath = join(root, "audio.mp3");
+    writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x10, 0x00]));
+    const extracted = {
+      url: `file://${audioPath}`,
+      title: "Audio",
+      content: "Transcript text",
+      diagnostics: { transcript: { provider: "openai" } },
+    } as ExtractedLinkContent;
+    createLinkPreviewClient.mockReturnValue({
+      fetchLinkContent: vi.fn(async () => extracted),
+    });
+    let stdoutText = "";
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        stdoutText += chunk.toString();
+        callback();
+      },
+    });
+    const clearProgressForStdout = vi.fn();
+    const ctx = makeContext({
+      env: {
+        OPENAI_API_KEY: "test-key",
+        YT_DLP_PATH: "yt-dlp",
+        SUMMARIZE_WHISPER_CPP_BINARY: "whisper-cli",
+      },
+      extractMode: true,
+      stdout,
+      clearProgressForStdout,
+    });
+
+    const result = await executeMediaFile(ctx, {
+      sourceKind: "file",
+      sourceLabel: audioPath,
+      attachment: {
+        kind: "file",
+        mediaType: "audio/mpeg",
+        filename: "audio.mp3",
+        bytes: new Uint8Array(),
+      },
+    });
+
+    expect(result).toEqual({ kind: "extraction", extracted });
+    expect(stdoutText).toBe("");
+    expect(clearProgressForStdout).not.toHaveBeenCalled();
+  });
+
   it("passes timeout/cacheMode and bypasses transcript cache when cache is disabled", async () => {
     createLinkPreviewClient.mockReset();
     const root = mkdtempSync(join(tmpdir(), "summarize-media-options-bypass-"));
