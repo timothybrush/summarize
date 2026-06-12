@@ -210,7 +210,8 @@ export function finalizeExtractedLinkContent({
       (typeof sourceMetricsRecord.viewCount === "number" &&
         Number.isSafeInteger(sourceMetricsRecord.viewCount) &&
         sourceMetricsRecord.viewCount >= 0)) &&
-    typeof sourceMetricsRecord.observedAt === "string"
+    typeof sourceMetricsRecord.observedAt === "string" &&
+    Number.isFinite(Date.parse(sourceMetricsRecord.observedAt))
       ? {
           platform: "youtube" as const,
           videoId: sourceMetricsRecord.videoId,

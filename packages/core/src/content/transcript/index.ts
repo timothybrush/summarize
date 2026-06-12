@@ -112,8 +112,14 @@ export const resolveTranscriptForLink = async (
     typeof cachedSourceMetricsRecord?.videoId === "string"
       ? cachedSourceMetricsRecord.videoId
       : null;
+  const cachedResourceKey =
+    typeof cacheOutcome.cached?.resourceKey === "string" &&
+    cacheOutcome.cached.resourceKey.trim().length > 0
+      ? cacheOutcome.cached.resourceKey.trim()
+      : null;
+  const cachedVideoIdentity = cachedResourceKey ?? cachedVideoId;
   const embeddedVideoIdentityMismatch = Boolean(
-    cacheOutcome.cached && embeddedYoutubeUrl && resourceKey && cachedVideoId !== resourceKey,
+    cacheOutcome.cached && embeddedYoutubeUrl && resourceKey && cachedVideoIdentity !== resourceKey,
   );
 
   if (cacheOutcome.resolution && !embeddedVideoIdentityMismatch) {
@@ -126,7 +132,7 @@ export const resolveTranscriptForLink = async (
     diagnostics.cacheStatus = "miss";
     diagnostics.notes = appendNote(
       diagnostics.notes,
-      "Cached transcript ignored because the embedded YouTube video changed or was not recorded",
+      "Cached transcript ignored because the embedded YouTube video changed or could not be verified",
     );
   }
 

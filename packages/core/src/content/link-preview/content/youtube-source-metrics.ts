@@ -1,10 +1,11 @@
 import {
-  extractYoutubeViewCount,
+  extractYoutubePlayerMetadata,
   fetchYoutubePlayerMetadata,
 } from "../../transcript/providers/youtube/captions.js";
 import { fetchMediaMetadataWithYtDlp } from "../../transcript/providers/youtube/yt-dlp.js";
 import { extractYouTubeVideoId } from "../../url.js";
 import type { LinkPreviewDeps } from "../deps.js";
+import { fetchWithTimeout } from "../fetch-with-timeout.js";
 import type { TranscriptResolution, TranscriptSource } from "../types.js";
 import type { SourceMetrics } from "./types.js";
 import type { DetectedVideo } from "./video.js";
@@ -16,7 +17,32 @@ const YOUTUBE_TRANSCRIPT_SOURCES = new Set<TranscriptSource>([
   "captionTracks",
   "youtube-media",
   "apify",
+  "yt-dlp",
 ]);
+
+function readSourceMetrics(value: unknown): SourceMetrics | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    record.platform !== "youtube" ||
+    typeof record.videoId !== "string" ||
+    record.videoId.length === 0 ||
+    (record.viewCount !== null &&
+      (typeof record.viewCount !== "number" ||
+        !Number.isSafeInteger(record.viewCount) ||
+        record.viewCount < 0)) ||
+    typeof record.observedAt !== "string" ||
+    !Number.isFinite(Date.parse(record.observedAt))
+  ) {
+    return null;
+  }
+  return {
+    platform: "youtube",
+    videoId: record.videoId,
+    viewCount: record.viewCount as number | null,
+    observedAt: record.observedAt,
+  };
+}
 
 export async function refreshYoutubeSourceMetrics({
   url,
@@ -37,15 +63,8 @@ export async function refreshYoutubeSourceMetrics({
 }): Promise<void> {
   const metricsDeadlineMs = startedAtMs + Math.min(timeoutMs, METRICS_BEST_EFFORT_TIMEOUT_MS);
   const remainingMetricsMs = () => Math.max(0, metricsDeadlineMs - Date.now());
-  const existingMetrics = transcriptResolution.metadata?.sourceMetrics;
-  const existingRecord =
-    existingMetrics && typeof existingMetrics === "object" && !Array.isArray(existingMetrics)
-      ? (existingMetrics as Record<string, unknown>)
-      : null;
-  const existingVideoId =
-    existingRecord?.platform === "youtube" && typeof existingRecord.videoId === "string"
-      ? existingRecord.videoId
-      : null;
+  const existingMetrics = readSourceMetrics(transcriptResolution.metadata?.sourceMetrics);
+  const existingVideoId = existingMetrics?.videoId ?? null;
   const urlVideoId = extractYouTubeVideoId(url);
   const detectedVideoId =
     detectedVideo?.kind === "youtube" ? extractYouTubeVideoId(detectedVideo.url) : null;
@@ -59,28 +78,35 @@ export async function refreshYoutubeSourceMetrics({
   const resolvedVideoId = urlVideoId ?? existingVideoId ?? resolvedEmbedId;
   if (!resolvedVideoId) return;
 
-  const existingViewCount =
-    existingRecord?.platform === "youtube" &&
-    typeof existingRecord.viewCount === "number" &&
-    Number.isSafeInteger(existingRecord.viewCount) &&
-    existingRecord.viewCount >= 0
-      ? existingRecord.viewCount
-      : null;
-  const htmlViewCount = urlVideoId ? extractYoutubeViewCount(html) : null;
-  const htmlViewObservedAt = htmlViewCount === null ? null : new Date(startedAtMs).toISOString();
-  let viewCount = htmlViewCount ?? existingViewCount;
-  let observedAt =
-    htmlViewObservedAt ??
-    (typeof existingRecord?.observedAt === "string"
-      ? existingRecord.observedAt
-      : new Date().toISOString());
-  const observedTime = Date.parse(observedAt);
-  const metricsAreStale =
-    !Number.isFinite(observedTime) || Date.now() - observedTime >= SOURCE_METRICS_TTL_MS;
-  const transcriptCacheHit = transcriptResolution.diagnostics?.cacheStatus === "hit";
-  const shouldRefresh =
-    htmlViewCount === null &&
-    (viewCount === null || transcriptCacheHit || existingRecord === null || metricsAreStale);
+  const htmlPlayerMetadata = urlVideoId ? extractYoutubePlayerMetadata(html) : null;
+  const existingMetricsForVideo =
+    existingMetrics?.videoId === resolvedVideoId ? existingMetrics : null;
+  let sourceMetrics =
+    htmlPlayerMetadata && urlVideoId && htmlPlayerMetadata.viewCount !== null
+      ? {
+          platform: "youtube" as const,
+          videoId: urlVideoId,
+          viewCount: htmlPlayerMetadata.viewCount,
+          observedAt: new Date(startedAtMs).toISOString(),
+        }
+      : (existingMetricsForVideo ??
+        (htmlPlayerMetadata && urlVideoId
+          ? {
+              platform: "youtube" as const,
+              videoId: urlVideoId,
+              viewCount: null,
+              observedAt: new Date(startedAtMs).toISOString(),
+            }
+          : null));
+  const existingObservedTime = existingMetricsForVideo
+    ? Date.parse(existingMetricsForVideo.observedAt)
+    : Number.NaN;
+  const existingMetricsAreFresh =
+    existingMetricsForVideo !== null &&
+    Number.isFinite(existingObservedTime) &&
+    Date.now() - existingObservedTime < SOURCE_METRICS_TTL_MS;
+  const htmlHasViewCount = typeof htmlPlayerMetadata?.viewCount === "number";
+  const shouldRefresh = !htmlHasViewCount && !existingMetricsAreFresh;
   const remainingTimeoutMs = remainingMetricsMs();
 
   if (shouldRefresh && remainingTimeoutMs > 0) {
@@ -92,44 +118,41 @@ export async function refreshYoutubeSourceMetrics({
         timeoutMs: remainingTimeoutMs,
       });
       if (refreshedMetrics) {
-        transcriptResolution.metadata = {
-          ...(transcriptResolution.metadata ?? {}),
-          sourceMetrics: refreshedMetrics,
-        };
-        return;
+        sourceMetrics = refreshedMetrics;
       }
-    }
-    const refreshed = await fetchYoutubePlayerMetadata(deps.fetch, {
-      html,
-      videoId: resolvedVideoId,
-      timeoutMs: remainingTimeoutMs,
-    });
-    let refreshedViewCount = refreshed?.viewCount ?? null;
-    let refreshObserved = refreshed !== null;
-    const ytDlpTimeoutMs = remainingMetricsMs();
-    if (refreshedViewCount === null && deps.ytDlpPath && ytDlpTimeoutMs > 0) {
-      const ytDlpMetadata = await fetchMediaMetadataWithYtDlp({
-        ytDlpPath: deps.ytDlpPath,
-        url: `https://www.youtube.com/watch?v=${resolvedVideoId}`,
-        timeoutMs: ytDlpTimeoutMs,
+    } else {
+      const refreshed = await fetchYoutubePlayerMetadata(deps.fetch, {
+        html,
+        videoId: resolvedVideoId,
+        timeoutMs: remainingTimeoutMs,
       });
-      refreshedViewCount = ytDlpMetadata?.viewCount ?? null;
-      refreshObserved ||= ytDlpMetadata !== null;
-    }
-    if (refreshObserved) {
-      viewCount = refreshedViewCount;
-      observedAt = new Date().toISOString();
+      let refreshedViewCount = refreshed?.viewCount ?? null;
+      let refreshObserved = refreshed !== null;
+      const ytDlpTimeoutMs = remainingMetricsMs();
+      if (refreshedViewCount === null && deps.ytDlpPath && ytDlpTimeoutMs > 0) {
+        const ytDlpMetadata = await fetchMediaMetadataWithYtDlp({
+          ytDlpPath: deps.ytDlpPath,
+          url: `https://www.youtube.com/watch?v=${resolvedVideoId}`,
+          timeoutMs: ytDlpTimeoutMs,
+        });
+        refreshedViewCount = ytDlpMetadata?.viewCount ?? null;
+        refreshObserved ||= ytDlpMetadata !== null;
+      }
+      if (refreshObserved) {
+        sourceMetrics = {
+          platform: "youtube",
+          videoId: resolvedVideoId,
+          viewCount: refreshedViewCount,
+          observedAt: new Date().toISOString(),
+        };
+      }
     }
   }
 
+  if (!sourceMetrics) return;
   transcriptResolution.metadata = {
     ...(transcriptResolution.metadata ?? {}),
-    sourceMetrics: {
-      platform: "youtube",
-      videoId: resolvedVideoId,
-      viewCount,
-      observedAt,
-    },
+    sourceMetrics,
   };
 }
 
@@ -148,34 +171,33 @@ export async function fetchYoutubeSourceMetrics({
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   let html = "";
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetchImpl(watchUrl, {
+    html = await fetchWithTimeout(
+      fetchImpl,
+      watchUrl,
+      {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
           Accept: "text/html,application/xhtml+xml",
         },
-        signal: controller.signal,
-      });
-      if (response.ok) html = await response.text();
-    } finally {
-      clearTimeout(timer);
-    }
+      },
+      timeoutMs,
+      async (response) => (response.ok ? await response.text() : ""),
+    );
   } catch {
     // yt-dlp remains available as an independent metadata fallback.
   }
 
-  const htmlViewCount = html ? extractYoutubeViewCount(html) : null;
-  if (htmlViewCount !== null) {
-    return {
-      platform: "youtube",
-      videoId,
-      viewCount: htmlViewCount,
-      observedAt: new Date(startedAt).toISOString(),
-    };
-  }
+  const htmlPlayerMetadata = html ? extractYoutubePlayerMetadata(html) : null;
+  const htmlObservation: SourceMetrics | null = htmlPlayerMetadata
+    ? {
+        platform: "youtube",
+        videoId,
+        viewCount: htmlPlayerMetadata.viewCount,
+        observedAt: new Date(startedAt).toISOString(),
+      }
+    : null;
+  if (htmlObservation && htmlObservation.viewCount !== null) return htmlObservation;
 
   const remainingAfterHtml = Math.max(0, timeoutMs - (Date.now() - startedAt));
   let playerObservation: SourceMetrics | null = null;
@@ -213,5 +235,5 @@ export async function fetchYoutubeSourceMetrics({
     }
   }
 
-  return playerObservation;
+  return playerObservation ?? htmlObservation;
 }

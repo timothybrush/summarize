@@ -253,6 +253,33 @@ describe("link-preview content utils", () => {
     });
   });
 
+  it("rejects source metrics without a valid observation timestamp", () => {
+    const diagnostics = makeDiagnostics();
+    const result = finalizeExtractedLinkContent({
+      url: "https://www.youtube.com/watch?v=abcdefghijk",
+      baseContent: "Transcript:\nhello",
+      maxCharacters: null,
+      title: null,
+      description: null,
+      siteName: "YouTube",
+      transcriptResolution: {
+        text: "hello",
+        source: "captionTracks",
+        metadata: {
+          sourceMetrics: {
+            platform: "youtube",
+            videoId: "abcdefghijk",
+            viewCount: 19_335,
+            observedAt: "not-a-date",
+          },
+        },
+      },
+      diagnostics,
+    });
+
+    expect(result.sourceMetrics).toBeNull();
+  });
+
   it("adds timed transcript text when segments are available", () => {
     const diagnostics = makeDiagnostics();
     const result = finalizeExtractedLinkContent({

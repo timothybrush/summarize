@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   extractYoutubeDurationSeconds,
+  extractYoutubePlayerMetadata,
   extractYoutubeViewCount,
   fetchTranscriptFromCaptionTracks,
 } from "../packages/core/src/content/transcript/providers/youtube/captions.js";
@@ -101,5 +102,17 @@ describe("YouTube captionTracks edge cases", () => {
 
     expect(extractYoutubeViewCount(html)).toBe(19_335);
     expect(extractYoutubeViewCount("<html></html>")).toBeNull();
+  });
+
+  it("distinguishes an unavailable count from a missing player response", () => {
+    const unavailableHtml = `ytInitialPlayerResponse = ${JSON.stringify({
+      playabilityStatus: { status: "LOGIN_REQUIRED" },
+    })};`;
+
+    expect(extractYoutubePlayerMetadata(unavailableHtml)).toEqual({
+      durationSeconds: null,
+      viewCount: null,
+    });
+    expect(extractYoutubePlayerMetadata("<html></html>")).toBeNull();
   });
 });

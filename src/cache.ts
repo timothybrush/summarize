@@ -384,21 +384,28 @@ export async function createCacheStore({
         content?: string | null;
         source?: TranscriptSource | string | null;
         metadata?: unknown;
+        resourceKey?: unknown;
       } | null = null;
       try {
         payload = JSON.parse(row.value) as {
           content?: string | null;
           source?: TranscriptSource | string | null;
           metadata?: unknown;
+          resourceKey?: unknown;
         };
       } catch {
         payload = null;
       }
+      const resourceKey =
+        typeof payload?.resourceKey === "string" && payload.resourceKey.trim().length > 0
+          ? payload.resourceKey.trim()
+          : null;
       return {
         content: payload?.content ?? null,
         source: normalizeTranscriptSource(payload?.source) ?? null,
         expired,
         metadata: (payload?.metadata as Record<string, unknown> | null | undefined) ?? null,
+        resourceKey,
       };
     },
     set: async ({ url, content, source, ttlMs, metadata, service, resourceKey, fileMtime }) => {

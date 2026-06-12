@@ -10,6 +10,7 @@ export interface TranscriptCacheGetResult {
   source: TranscriptSource | null;
   expired: boolean;
   metadata?: Record<string, unknown> | null;
+  resourceKey?: string | null;
 }
 
 /** Public write arguments for transcript cache implementations. */

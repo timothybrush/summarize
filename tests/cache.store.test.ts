@@ -177,6 +177,7 @@ describe("cache store", () => {
     const miss = await otherStore.transcriptCache.get({ url: "https://example.com/video" });
 
     expect(hit?.content).toBe("hello");
+    expect(hit?.resourceKey).toBe("abc123");
     expect(miss).toBeNull();
 
     otherStore.close();

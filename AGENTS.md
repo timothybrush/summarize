@@ -15,6 +15,7 @@
   - Build: `pnpm -s build` (builds core first)
   - Gate: `pnpm -s check`
   - Import from apps: prefer `@steipete/summarize-core` to avoid pulling CLI-only deps.
+- Dependencies: stable releases need a 7-day stabilization delay before adoption; prereleases remain excluded unless already adopted.
 - Daemon: restart with `pnpm -s summarize daemon restart`; verify via `pnpm -s summarize daemon status`.
 - Rebuild (extension + daemon): run **both** in order:
   1. `pnpm -C apps/chrome-extension build`

@@ -1,5 +1,6 @@
 export {
   extractYoutubeDurationSeconds,
+  extractYoutubePlayerMetadata,
   extractYoutubeViewCount,
   fetchYoutubePlayerMetadata,
   fetchYoutubeDurationSecondsViaPlayer,

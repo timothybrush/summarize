@@ -83,4 +83,37 @@ describe("fetchWithTimeout", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the timeout active while consuming the response body", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return {
+          ok: true,
+          text: () =>
+            new Promise<string>((_resolve, reject) => {
+              signal?.addEventListener("abort", () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              });
+            }),
+        } as Response;
+      });
+
+      const promise = fetchWithTimeout(
+        fetchMock as unknown as typeof fetch,
+        "https://example.com",
+        undefined,
+        10,
+        async (response) => await response.text(),
+      );
+      const assertion = expect(promise).rejects.toMatchObject({ name: "FetchTimeoutError" });
+      await vi.advanceTimersByTimeAsync(20);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

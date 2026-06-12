@@ -2,6 +2,10 @@
 
 ## 0.17.4 - Unreleased
 
+### Fixes
+
+- YouTube metadata: harden view-count freshness, fallbacks, embedded transcript cache identity, and timeout enforcement while reading response bodies.
+
 ## 0.17.3 - 2026-06-11
 
 ### Features

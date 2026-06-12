@@ -11,7 +11,7 @@ import { extractYoutubeiTranscriptConfig, fetchTranscriptFromTranscriptEndpoint 
 import { fetchTranscriptWithApify } from "./apify.js";
 import {
   extractYoutubeDurationSeconds,
-  extractYoutubeViewCount,
+  extractYoutubePlayerMetadata,
   fetchTranscriptFromCaptionTracks,
   fetchYoutubePlayerMetadata,
 } from "./captions.js";
@@ -101,8 +101,17 @@ export async function resolveDurationMetadata(args: {
       ? undefined
       : Math.max(1, options.timeoutMs - (Date.now() - startedAt));
 
+  const initialPlayerMetadata = extractYoutubePlayerMetadata(htmlText);
   let durationSeconds = extractYoutubeDurationSeconds(htmlText);
-  let viewCount = extractYoutubeViewCount(htmlText);
+  let sourceMetrics =
+    effectiveVideoId && initialPlayerMetadata
+      ? {
+          platform: "youtube" as const,
+          videoId: effectiveVideoId,
+          viewCount: initialPlayerMetadata.viewCount,
+          observedAt: new Date().toISOString(),
+        }
+      : null;
   if (!durationSeconds && effectiveVideoId) {
     const playerMetadata = await fetchYoutubePlayerMetadata(options.fetch, {
       html: htmlText,
@@ -110,7 +119,14 @@ export async function resolveDurationMetadata(args: {
       timeoutMs: remainingTimeoutMs(),
     });
     durationSeconds ??= playerMetadata?.durationSeconds ?? null;
-    viewCount ??= playerMetadata?.viewCount ?? null;
+    if (playerMetadata) {
+      sourceMetrics = {
+        platform: "youtube",
+        videoId: effectiveVideoId,
+        viewCount: playerMetadata.viewCount,
+        observedAt: new Date().toISOString(),
+      };
+    }
   }
   if (!durationSeconds && options.ytDlpPath) {
     const ytDlpMetadata = await fetchMediaMetadataWithYtDlp({
@@ -119,7 +135,14 @@ export async function resolveDurationMetadata(args: {
       timeoutMs: remainingTimeoutMs(),
     });
     durationSeconds ??= ytDlpMetadata?.durationSeconds ?? null;
-    viewCount ??= ytDlpMetadata?.viewCount ?? null;
+    if (effectiveVideoId && ytDlpMetadata) {
+      sourceMetrics = {
+        platform: "youtube",
+        videoId: effectiveVideoId,
+        viewCount: ytDlpMetadata.viewCount ?? sourceMetrics?.viewCount ?? null,
+        observedAt: new Date().toISOString(),
+      };
+    }
   }
 
   return {
@@ -128,16 +151,7 @@ export async function resolveDurationMetadata(args: {
     durationSeconds > 0
       ? { durationSeconds }
       : {}),
-    ...(effectiveVideoId
-      ? {
-          sourceMetrics: {
-            platform: "youtube" as const,
-            videoId: effectiveVideoId,
-            viewCount,
-            observedAt: new Date().toISOString(),
-          },
-        }
-      : {}),
+    ...(sourceMetrics ? { sourceMetrics } : {}),
   };
 }
 

@@ -3,14 +3,29 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 type FetchLike = typeof fetch;
 type FetchArguments = Parameters<typeof fetch>;
 
+export function fetchWithTimeout(
+  fetchImpl: FetchLike,
+  input: FetchArguments[0],
+  init?: FetchArguments[1],
+  timeoutMs?: number,
+): Promise<Response>;
+export function fetchWithTimeout<T>(
+  fetchImpl: FetchLike,
+  input: FetchArguments[0],
+  init: FetchArguments[1],
+  timeoutMs: number | undefined,
+  consume: (response: Response) => Promise<T>,
+): Promise<T>;
 export async function fetchWithTimeout(
   fetchImpl: FetchLike,
   input: FetchArguments[0],
   init?: FetchArguments[1],
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<Response> {
+  consume?: (response: Response) => Promise<unknown>,
+): Promise<unknown> {
   if (init?.signal) {
-    return fetchImpl(input, init ?? {});
+    const response = await fetchImpl(input, init ?? {});
+    return consume ? consume(response) : response;
   }
 
   const controller = new AbortController();
@@ -30,7 +45,8 @@ export async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
     };
-    return await fetchImpl(input, finalInit);
+    const response = await fetchImpl(input, finalInit);
+    return consume ? await consume(response) : response;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       const timeoutError = new Error(`Fetch aborted after ${clampedTimeoutMs}ms`);

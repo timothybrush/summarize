@@ -198,6 +198,121 @@ describe("transcript cache helpers", () => {
 });
 
 describe("transcript cache integration", () => {
+  it("keeps legacy cached transcripts with stored embedded YouTube identity", async () => {
+    const transcriptCache: TranscriptCache = {
+      get: vi.fn(async () => ({
+        content: "legacy cached transcript",
+        source: "captionTracks",
+        expired: false,
+        metadata: null,
+        resourceKey: "abcdefghijk",
+      })),
+      set: vi.fn(async () => {}),
+    };
+    const fetchMock = vi.fn(async () => {
+      throw new Error("provider should not run");
+    });
+
+    const result = await resolveTranscriptForLink(
+      "https://example.com/video",
+      '<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>',
+      {
+        fetch: fetchMock as unknown as typeof fetch,
+        apifyApiToken: null,
+        ytDlpPath: null,
+        groqApiKey: null,
+        falApiKey: null,
+        openaiApiKey: null,
+        scrapeWithFirecrawl: null,
+        convertHtmlToMarkdown: null,
+        transcriptCache,
+        readTweetWithBird: null,
+      },
+      { youtubeTranscriptMode: "web", cacheMode: "default" },
+    );
+
+    expect(result.text).toBe("legacy cached transcript");
+    expect(result.diagnostics?.cacheStatus).toBe("hit");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects embedded YouTube cache entries without a verifiable identity", async () => {
+    const transcriptCache: TranscriptCache = {
+      get: vi.fn(async () => ({
+        content: "unverifiable cached transcript",
+        source: "captionTracks",
+        expired: false,
+        metadata: null,
+      })),
+      set: vi.fn(async () => {}),
+    };
+    const fetchMock = vi.fn(async () => new Response("nope", { status: 500 }));
+
+    const result = await resolveTranscriptForLink(
+      "https://example.com/video",
+      '<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>',
+      {
+        fetch: fetchMock as unknown as typeof fetch,
+        apifyApiToken: null,
+        ytDlpPath: null,
+        groqApiKey: null,
+        falApiKey: null,
+        openaiApiKey: null,
+        scrapeWithFirecrawl: null,
+        convertHtmlToMarkdown: null,
+        transcriptCache,
+        readTweetWithBird: null,
+      },
+      { youtubeTranscriptMode: "web", cacheMode: "default" },
+    );
+
+    expect(result.text).toBeNull();
+    expect(result.diagnostics?.cacheStatus).toBe("miss");
+    expect(result.diagnostics?.notes).toContain("could not be verified");
+  });
+
+  it("rejects cached transcripts for a confirmed different embedded YouTube video", async () => {
+    const transcriptCache: TranscriptCache = {
+      get: vi.fn(async () => ({
+        content: "stale cached transcript",
+        source: "captionTracks",
+        expired: false,
+        metadata: {
+          sourceMetrics: {
+            platform: "youtube",
+            videoId: "oldvideo123",
+            viewCount: 10,
+            observedAt: "2026-06-01T00:00:00.000Z",
+          },
+        },
+      })),
+      set: vi.fn(async () => {}),
+    };
+    const fetchMock = vi.fn(async () => new Response("nope", { status: 500 }));
+
+    const result = await resolveTranscriptForLink(
+      "https://example.com/video",
+      '<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>',
+      {
+        fetch: fetchMock as unknown as typeof fetch,
+        apifyApiToken: null,
+        ytDlpPath: null,
+        groqApiKey: null,
+        falApiKey: null,
+        openaiApiKey: null,
+        scrapeWithFirecrawl: null,
+        convertHtmlToMarkdown: null,
+        transcriptCache,
+        readTweetWithBird: null,
+      },
+      { youtubeTranscriptMode: "web", cacheMode: "default" },
+    );
+
+    expect(result.text).toBeNull();
+    expect(result.diagnostics?.cacheStatus).toBe("miss");
+    expect(result.diagnostics?.notes).toContain("embedded YouTube video changed");
+  });
+
   it("falls back to cached transcript content when provider misses", async () => {
     const transcriptCache: TranscriptCache = {
       get: vi.fn(async () => ({
