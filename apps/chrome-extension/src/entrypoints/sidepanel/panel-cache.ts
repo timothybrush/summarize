@@ -1,4 +1,5 @@
 import type { PanelCachePayload } from "../../lib/panel-contracts";
+import type { PanelState } from "./types";
 
 export type { PanelCachePayload } from "../../lib/panel-contracts";
 
@@ -35,6 +36,32 @@ export type PanelCacheControllerOptions = {
   sendCache: (payload: PanelCachePayload) => void;
   sendRequest: (request: PanelCacheRequest) => void;
 };
+
+export function buildPanelCachePayload(
+  panelState: PanelState,
+  transcriptTimedText: string | null,
+): PanelCachePayload | null {
+  const tabId = panelState.activeRun.tabId ?? panelState.navigation.activeTabId;
+  const url = panelState.currentSource?.url ?? panelState.navigation.activeTabUrl;
+  if (!tabId || !url) return null;
+  const slidesSummary = panelState.slidesSummary;
+  const hasSlidesSummaryState = Boolean(slidesSummary.runId || slidesSummary.markdown.trim());
+  return {
+    tabId,
+    url,
+    title: panelState.currentSource?.title ?? null,
+    runId: panelState.runId ?? null,
+    slidesRunId: panelState.slidesRunId ?? null,
+    summaryMarkdown: panelState.summaryMarkdown ?? null,
+    summaryFromCache: panelState.summaryFromCache ?? null,
+    slidesSummaryMarkdown: slidesSummary.markdown || null,
+    slidesSummaryComplete: hasSlidesSummaryState ? slidesSummary.complete : null,
+    slidesSummaryModel: hasSlidesSummaryState ? slidesSummary.model : null,
+    lastMeta: panelState.lastMeta,
+    slides: panelState.slides ?? null,
+    transcriptTimedText,
+  };
+}
 
 export function createPanelCacheController(
   options: PanelCacheControllerOptions,

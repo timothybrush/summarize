@@ -62,7 +62,6 @@ function createHarness(
       ? (action) => applyPanelStateAction(panelState, action)
       : undefined,
     getActiveTabId: () => panelState.navigation.activeTabId,
-    getActiveTabUrl: () => panelState.navigation.activeTabUrl,
     cancelAutoSummarize: calls.cancelAutoSummarize,
     summaryStream: {
       isStreaming: () => options.streaming ?? false,
@@ -98,37 +97,6 @@ function createHarness(
 }
 
 describe("summary run runtime", () => {
-  it("retains non-empty rendered markdown for the current source only", () => {
-    const harness = createHarness({ dispatch: true });
-    harness.panelState.currentSource = {
-      url: "https://example.com/watch?v=1#chapter",
-      title: "Example",
-    };
-
-    expect(harness.runtime.getRetainedMarkdown()).toBeNull();
-    harness.runtime.rememberRenderedMarkdown("  ");
-    expect(harness.panelState.retainedSlideSummary).toBeNull();
-
-    harness.runtime.rememberRenderedMarkdown("# Summary");
-    expect(harness.runtime.getRetainedMarkdown()).toBe("# Summary");
-
-    harness.panelState.currentSource = { url: "https://example.com/other", title: "Other" };
-    expect(harness.runtime.getRetainedMarkdown()).toBeNull();
-  });
-
-  it("uses the active tab as the retained-summary scope fallback", () => {
-    const harness = createHarness();
-
-    harness.runtime.rememberRenderedMarkdown("Summary");
-
-    expect(harness.panelState.retainedSlideSummary).toEqual({
-      markdown: "Summary",
-      url: "https://example.com/watch?v=1",
-    });
-    harness.panelState.navigation.activeTabUrl = null;
-    expect(harness.runtime.getRetainedMarkdown()).toBe("Summary");
-  });
-
   it("attaches a summary-only run and resets unrelated chat and slides", () => {
     const harness = createHarness();
     harness.panelState.chat.streaming = true;

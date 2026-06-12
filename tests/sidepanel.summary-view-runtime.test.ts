@@ -50,7 +50,6 @@ describe("summary view runtime", () => {
       headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
       slidesTextController: {
         reset: vi.fn(),
-        getTranscriptTimedText: vi.fn(() => null),
         getTranscriptAvailable: vi.fn(() => false),
       },
       getSlidesHydrator: () => ({ syncFromCache }),
@@ -115,7 +114,6 @@ describe("summary view runtime", () => {
       headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
       slidesTextController: {
         reset: vi.fn(),
-        getTranscriptTimedText: vi.fn(() => null),
         getTranscriptAvailable: vi.fn(() => false),
       },
       getSlidesHydrator: () => ({ syncFromCache: vi.fn() }),
@@ -180,7 +178,6 @@ describe("summary view runtime", () => {
       headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
       slidesTextController: {
         reset: vi.fn(),
-        getTranscriptTimedText: vi.fn(() => null),
         getTranscriptAvailable: vi.fn(() => false),
       },
       getSlidesHydrator: () => ({ syncFromCache: vi.fn() }),
@@ -237,7 +234,6 @@ describe("summary view runtime", () => {
       headerController: { setBaseTitle: vi.fn(), setBaseSubtitle: vi.fn() },
       slidesTextController: {
         reset: vi.fn(),
-        getTranscriptTimedText: vi.fn(() => null),
         getTranscriptAvailable: vi.fn(() => false),
       },
       getSlidesHydrator: () => ({ syncFromCache: vi.fn() }),

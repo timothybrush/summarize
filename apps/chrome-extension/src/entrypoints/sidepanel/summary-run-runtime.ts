@@ -40,7 +40,6 @@ export function createSummaryRunRuntime({
   panelState,
   dispatchPanelState,
   getActiveTabId,
-  getActiveTabUrl,
   cancelAutoSummarize,
   summaryStream,
   slides,
@@ -50,7 +49,6 @@ export function createSummaryRunRuntime({
   panelState: PanelState;
   dispatchPanelState?: (action: PanelStateAction) => void;
   getActiveTabId: () => number | null;
-  getActiveTabUrl: () => string | null;
   cancelAutoSummarize: () => void;
   summaryStream: SummaryStreamPort;
   slides: SlidesRunPort;
@@ -63,27 +61,6 @@ export function createSummaryRunRuntime({
     } else {
       applyPanelStateAction(panelState, action);
     }
-  };
-
-  const getSummaryScopeUrl = () => panelState.currentSource?.url ?? getActiveTabUrl() ?? null;
-
-  const rememberRenderedMarkdown = (markdown: string) => {
-    if (!markdown.trim()) return;
-    dispatch({
-      type: "retained-slide-summary",
-      value: {
-        markdown,
-        url: getSummaryScopeUrl(),
-      },
-    });
-  };
-
-  const getRetainedMarkdown = () => {
-    const retained = panelState.retainedSlideSummary;
-    if (!retained) return null;
-    const currentUrl = getSummaryScopeUrl();
-    if (retained.url && currentUrl && !panelUrlsMatch(retained.url, currentUrl)) return null;
-    return retained.markdown;
   };
 
   const attachRun = (run: RunStart) => {
@@ -229,10 +206,8 @@ export function createSummaryRunRuntime({
   return {
     applySnapshot,
     attachRun,
-    getRetainedMarkdown,
     maybeStartPendingForUrl,
     rememberPendingRun,
     rememberPendingSnapshot,
-    rememberRenderedMarkdown,
   };
 }

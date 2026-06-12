@@ -9,7 +9,6 @@ import type { PanelPhase, PanelState } from "./types";
 
 type SlidesTextControllerLike = {
   reset: () => void;
-  getTranscriptTimedText: () => string | null;
   getTranscriptAvailable: () => boolean;
 };
 
@@ -111,29 +110,6 @@ export function createSummaryViewRuntime(opts: SummaryViewRuntimeOpts) {
     if (!preserveChat) {
       opts.resetChatState();
     }
-  }
-
-  function buildPanelCachePayload(): PanelCachePayload | null {
-    const tabId = opts.panelState.activeRun.tabId ?? opts.panelState.navigation.activeTabId;
-    const url = opts.panelState.currentSource?.url ?? opts.panelState.navigation.activeTabUrl;
-    if (!tabId || !url) return null;
-    const slidesSummary = opts.panelState.slidesSummary;
-    const hasSlidesSummaryState = Boolean(slidesSummary.runId || slidesSummary.markdown.trim());
-    return {
-      tabId,
-      url,
-      title: opts.panelState.currentSource?.title ?? null,
-      runId: opts.panelState.runId ?? null,
-      slidesRunId: opts.panelState.slidesRunId ?? null,
-      summaryMarkdown: opts.panelState.summaryMarkdown ?? null,
-      summaryFromCache: opts.panelState.summaryFromCache ?? null,
-      slidesSummaryMarkdown: slidesSummary.markdown || null,
-      slidesSummaryComplete: hasSlidesSummaryState ? slidesSummary.complete : null,
-      slidesSummaryModel: hasSlidesSummaryState ? slidesSummary.model : null,
-      lastMeta: opts.panelState.lastMeta,
-      slides: opts.panelState.slides ?? null,
-      transcriptTimedText: opts.slidesTextController.getTranscriptTimedText() ?? null,
-    };
   }
 
   function applyPanelCache(payload: PanelCachePayload, applyOpts?: { preserveChat?: boolean }) {
@@ -252,7 +228,6 @@ export function createSummaryViewRuntime(opts: SummaryViewRuntimeOpts) {
 
   return {
     applyPanelCache,
-    buildPanelCachePayload,
     resetSummaryView,
   };
 }

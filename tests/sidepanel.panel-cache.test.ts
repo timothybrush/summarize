@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildPanelCachePayload,
   createPanelCacheController,
   type PanelCachePayload,
 } from "../apps/chrome-extension/src/entrypoints/sidepanel/panel-cache.js";
+import { createInitialPanelState } from "../apps/chrome-extension/src/entrypoints/sidepanel/panel-state-store";
 
 const samplePayload = (overrides: Partial<PanelCachePayload> = {}): PanelCachePayload => ({
   tabId: 1,
@@ -18,6 +20,42 @@ const samplePayload = (overrides: Partial<PanelCachePayload> = {}): PanelCachePa
 });
 
 describe("panel cache controller", () => {
+  it("builds snapshots from canonical panel state", () => {
+    const panelState = createInitialPanelState();
+    panelState.navigation.activeTabId = 7;
+    panelState.navigation.activeTabUrl = "https://example.com/video";
+    panelState.currentSource = { url: "https://example.com/video", title: "Video" };
+    panelState.runId = "run-1";
+    panelState.slidesRunId = "slides-1";
+    panelState.summaryMarkdown = "Summary";
+    panelState.slidesSummary = {
+      runId: "slides-1",
+      url: "https://example.com/video",
+      markdown: "Slides summary",
+      pending: null,
+      hadError: false,
+      complete: true,
+      model: "openai/gpt-5.4",
+    };
+
+    expect(buildPanelCachePayload(panelState, "00:00 Intro")).toMatchObject({
+      tabId: 7,
+      url: "https://example.com/video",
+      title: "Video",
+      runId: "run-1",
+      slidesRunId: "slides-1",
+      summaryMarkdown: "Summary",
+      slidesSummaryMarkdown: "Slides summary",
+      slidesSummaryComplete: true,
+      slidesSummaryModel: "openai/gpt-5.4",
+      transcriptTimedText: "00:00 Intro",
+    });
+  });
+
+  it("skips snapshots without a tab and URL", () => {
+    expect(buildPanelCachePayload(createInitialPanelState(), null)).toBeNull();
+  });
+
   it("stores and resolves snapshots per tab", () => {
     const sendCache = vi.fn();
     const sendRequest = vi.fn();

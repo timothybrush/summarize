@@ -20,11 +20,19 @@ import { createSidepanelFeedbackRuntime } from "./feedback-runtime";
 import { createSidepanelInteractionRuntime } from "./interaction-runtime";
 import { createMetricsController } from "./metrics-controller";
 import { createNavigationRuntime } from "./navigation-runtime";
-import { createPanelCacheController, type PanelCachePayload } from "./panel-cache";
+import {
+  buildPanelCachePayload,
+  createPanelCacheController,
+  type PanelCachePayload,
+} from "./panel-cache";
 import { createPanelMessagingRuntime } from "./panel-messaging";
 import { createPanelStateStore } from "./panel-state-store";
 import { createPanelPhaseRuntime } from "./phase-runtime";
 import { createPlannedSlidesRuntime } from "./planned-slides-runtime";
+import {
+  retainRenderedSlideSummary,
+  selectRetainedSlideSummaryMarkdown,
+} from "./retained-slide-summary";
 import { createRequiredRuntimeReference } from "./runtime-reference";
 import { panelUrlsMatch } from "./session-policy";
 import { createSetupControlsRuntime } from "./setup-controls-runtime";
@@ -377,10 +385,11 @@ const summaryViewRuntime = createSummaryViewRuntime({
   queueSlidesRender,
   setPhase,
 });
-const { applyPanelCache, buildPanelCachePayload, resetSummaryView } = summaryViewRuntime;
+const { applyPanelCache, resetSummaryView } = summaryViewRuntime;
 
 const panelCacheController = createPanelCacheController({
-  getSnapshot: buildPanelCachePayload,
+  getSnapshot: () =>
+    buildPanelCachePayload(panelState, slidesTextController.getTranscriptTimedText()),
   sendCache: (payload) => {
     void send({ type: "panel:cache", cache: payload });
   },
@@ -398,7 +407,7 @@ function renderMarkdownDisplay() {
 }
 
 function renderMarkdown(markdown: string) {
-  summaryRunRuntime.rememberRenderedMarkdown(markdown);
+  retainRenderedSlideSummary(panelState, panelStateStore.dispatch, markdown);
   slidesViewReference.get().renderMarkdown(markdown);
 }
 
@@ -443,7 +452,7 @@ const slidesViewRuntime = createSlidesViewRuntime({
   hideSlideNotice,
   panelState,
   dispatchPanelState: panelStateStore.dispatch,
-  getFallbackSummaryMarkdown: () => summaryRunRuntime.getRetainedMarkdown(),
+  getFallbackSummaryMarkdown: () => selectRetainedSlideSummaryMarkdown(panelState),
 });
 
 slidesViewReference.set(slidesViewRuntime);
@@ -457,7 +466,7 @@ registerSidepanelTestHooks({
   applySlidesPayload,
   getRunId: () => panelState.runId,
   getSummaryMarkdown: () => panelState.summaryMarkdown ?? "",
-  getRetainedSlideSummaryMarkdown: () => summaryRunRuntime.getRetainedMarkdown() ?? "",
+  getRetainedSlideSummaryMarkdown: () => selectRetainedSlideSummaryMarkdown(panelState) ?? "",
   getSlideDescriptions: () => slidesTextController.getDescriptionEntries(),
   getSlideSummaryEntries: () => slidesTextController.getSummaryEntries(),
   getSlideTitleEntries: () => Array.from(slidesTextController.getTitles().entries()),
@@ -723,7 +732,6 @@ const summaryRunRuntime = createSummaryRunRuntime({
   panelState,
   dispatchPanelState: panelStateStore.dispatch,
   getActiveTabId,
-  getActiveTabUrl,
   cancelAutoSummarize: autoSummarizeRuntime.cancel,
   summaryStream: {
     isStreaming: streamController.isStreaming,
