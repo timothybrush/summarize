@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { isDirectMediaExtension, isDirectMediaUrl } from "@steipete/summarize-core/content/url";
+import {
+  isDirectMediaExtension,
+  isDirectMediaUrl,
+  isDirectVideoInput,
+} from "@steipete/summarize-core/content/url";
+import mime from "mime";
 import {
   classifyUrl,
   type AssetAttachment,
@@ -21,8 +27,12 @@ export type AcquiredAssetInput = AcquiredAssetInputBase &
   ({ kind: "resolved-asset" } | { kind: "resolved-media" });
 export type AcquiredResolvedAssetInput = AcquiredAssetInputBase & { kind: "resolved-asset" };
 export type AcquiredMediaInput = AcquiredAssetInputBase & { kind: "resolved-media" };
+export type MaterializedAcquiredInput = {
+  filePath: string;
+  cleanup: () => Promise<void>;
+};
 
-export type UrlAssetRoute = "asset" | "media" | "none";
+export type UrlAssetRoute = "asset" | "audio" | "video" | "none";
 
 function normalizePathForExtension(value: string): string {
   try {
@@ -72,6 +82,13 @@ function createMediaInput({
   };
 }
 
+export async function getLocalAssetSize(filePath: string): Promise<number | null> {
+  return await fs
+    .stat(filePath)
+    .then((stat) => (stat.isFile() ? stat.size : null))
+    .catch(() => null);
+}
+
 export async function acquireLocalAssetInput({
   filePath,
   maxBytes,
@@ -80,10 +97,7 @@ export async function acquireLocalAssetInput({
   maxBytes?: number;
 }): Promise<AcquiredAssetInput> {
   if (isTranscribableAssetPath(filePath)) {
-    const sizeBytes = await fs
-      .stat(filePath)
-      .then((stat) => (stat.isFile() ? stat.size : null))
-      .catch(() => null);
+    const sizeBytes = await getLocalAssetSize(filePath);
     return createMediaInput({
       sourceKind: "file",
       sourceLabel: filePath,
@@ -121,13 +135,15 @@ export async function resolveUrlAssetRoute({
   assumeAsset?: boolean;
 }): Promise<UrlAssetRoute> {
   if (!url || isYoutubeUrl) return "none";
-  if (isTranscribableAssetPath(url)) return "media";
-  if (assumeAsset) return "asset";
-  if (!detectUnknownAssetUrls && !shouldProbeUnknownAssetUrl(url)) return "none";
+  if (isTranscribableAssetPath(url)) return isDirectVideoInput(url) ? "video" : "audio";
+  if (!detectUnknownAssetUrls && !shouldProbeUnknownAssetUrl(url)) {
+    return assumeAsset ? "asset" : "none";
+  }
 
   const kind = await classifyUrl({ url, fetchImpl, timeoutMs });
-  if (kind.kind === "media") return "media";
-  return kind.kind === "asset" ? "asset" : "none";
+  if (kind.kind === "media") return kind.mediaType.startsWith("video/") ? "video" : "audio";
+  if (kind.kind === "asset") return "asset";
+  return assumeAsset ? "asset" : "none";
 }
 
 export function createRemoteMediaInput(url: string): AcquiredMediaInput {
@@ -176,4 +192,30 @@ export async function acquireRemoteAssetInput({
     attachment: loaded.attachment,
     sizeBytes: loaded.attachment.bytes.byteLength,
   };
+}
+
+export async function materializeAcquiredMediaInput(
+  input: AcquiredMediaInput,
+): Promise<MaterializedAcquiredInput> {
+  const extension = mime.getExtension(input.attachment.mediaType);
+  const rawFilename = path.basename(input.attachment.filename?.trim() || "media");
+  const filename =
+    path.extname(rawFilename) || !extension ? rawFilename : `${rawFilename}.${extension}`;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "summarize-media-"));
+  const filePath = path.join(tempDir, filename);
+  const cleanup = async () => {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  };
+
+  try {
+    await fs.writeFile(filePath, input.attachment.bytes, {
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+
+  return { filePath, cleanup };
 }

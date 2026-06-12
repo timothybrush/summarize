@@ -177,7 +177,7 @@ describe("asset helpers", () => {
           }),
         timeoutMs: 10,
       }),
-    ).resolves.toEqual({ kind: "media" });
+    ).resolves.toEqual({ kind: "media", mediaType: "audio/mpeg" });
 
     await expect(
       classifyUrl({
@@ -192,7 +192,7 @@ describe("asset helpers", () => {
           }),
         timeoutMs: 10,
       }),
-    ).resolves.toEqual({ kind: "media" });
+    ).resolves.toEqual({ kind: "media", mediaType: "audio/mpeg" });
   });
 
   it("builds prompt messages with attachments", () => {

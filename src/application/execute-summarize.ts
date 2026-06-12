@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { isYouTubeUrl } from "../content/index.js";
+import { isDirectVideoInput, isYouTubeUrl } from "@steipete/summarize-core/content/url";
 import type { ExtractedLinkContent } from "../content/index.js";
 import { hasEngineErrorCode } from "../engine/errors.js";
 import { buildUrlPrompt } from "../engine/web-prompt.js";
@@ -23,8 +23,10 @@ import {
   acquireLocalAssetInput,
   acquireRemoteAssetInput,
   createRemoteMediaInput,
+  getLocalAssetSize,
   isPdfAssetPath,
   isTranscribableAssetPath,
+  materializeAcquiredMediaInput,
   resolveUrlAssetRoute,
 } from "./input-acquisition.js";
 import { createTempFileFromStdin } from "./stdin-input.js";
@@ -278,7 +280,7 @@ export async function executeSummarize(
           "--extract for local files is only supported for media files (MP3, MP4, WAV, etc.) and PDF files",
         );
       }
-      if (request.slides && isTranscribableAssetPath(executionInput.filePath)) {
+      if (request.slides && isDirectVideoInput(executionInput.filePath)) {
         executionInput = {
           kind: "url",
           url: pathToFileURL(executionInput.filePath).href,
@@ -286,13 +288,14 @@ export async function executeSummarize(
           maxCharacters: null,
         };
       } else {
+        const sizeBytes = await getLocalAssetSize(executionInput.filePath);
         emit({
           type: "input-progress",
           phase: "loading",
           source: executionInput.filePath,
           filename: path.basename(executionInput.filePath),
           mediaType: null,
-          sizeBytes: null,
+          sizeBytes,
         });
         const acquired = await acquireLocalAssetInput({
           filePath: executionInput.filePath,
@@ -463,8 +466,8 @@ export async function executeSummarize(
         timeoutMs: boundPrepared.urlFlowContext.flags.timeoutMs,
         detectUnknownAssetUrls: false,
       });
-      if (route === "media") {
-        if (request.slides) {
+      if (route === "audio" || route === "video") {
+        if (request.slides && route === "video") {
           executionInput = { ...rawUrlInput, kind: "url" };
         } else {
           const acquired = createRemoteMediaInput(rawUrlInput.url);
@@ -549,13 +552,17 @@ export async function executeSummarize(
             fetchImpl: ctx.io.fetch,
             timeoutMs: ctx.flags.timeoutMs,
             detectUnknownAssetUrls: true,
+            assumeAsset: true,
           });
-          if (fallbackRoute === "media" && !request.slides) {
+          if (
+            (fallbackRoute === "audio" || fallbackRoute === "video") &&
+            (!request.slides || fallbackRoute === "audio")
+          ) {
             const acquired = createRemoteMediaInput(rawUrlInput.url);
             emitAcquiredProgress(acquired);
             return await executeResolvedMediaInput(acquired);
           }
-          if (fallbackRoute === "asset") {
+          if (fallbackRoute === "asset" || (fallbackRoute === "video" && request.slides)) {
             const acquired = await acquireRemoteAssetInput({
               url: rawUrlInput.url,
               fetchImpl: ctx.io.fetch,
@@ -563,6 +570,22 @@ export async function executeSummarize(
             });
             if (acquired) {
               emitAcquiredProgress(acquired);
+              if (
+                acquired.kind === "resolved-media" &&
+                request.slides &&
+                acquired.attachment.mediaType.toLowerCase().startsWith("video/")
+              ) {
+                const materialized = await materializeAcquiredMediaInput(acquired);
+                try {
+                  return await executeUrlFlow({
+                    ctx,
+                    url: pathToFileURL(materialized.filePath).href,
+                    isYoutubeUrl: false,
+                  });
+                } finally {
+                  await materialized.cleanup();
+                }
+              }
               return await executeAcquiredAssetInput(acquired);
             }
           }

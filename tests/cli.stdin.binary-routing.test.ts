@@ -1,58 +1,65 @@
-import { access, readFile } from "node:fs/promises";
-import { extname } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SummarizeRequest, SummarizeRuntime } from "../src/application/summarize-contracts.js";
 
 const seen = vi.hoisted(() => ({
-  filePath: null as string | null,
-  bytes: null as Buffer | null,
+  request: null as SummarizeRequest | null,
+  runtime: null as SummarizeRuntime | null,
 }));
 
-vi.mock("../src/run/flows/asset/input.js", () => ({
-  isTranscribableExtension: vi.fn(() => false),
-  withUrlAsset: vi.fn(async () => false),
-  handleFileInput: vi.fn(async (_ctx, inputTarget) => {
-    if (inputTarget.kind !== "file") return false;
-    seen.filePath = inputTarget.filePath;
-    seen.bytes = await readFile(inputTarget.filePath);
-    return true;
+vi.mock("../src/application/execute-summarize.js", () => ({
+  executeSummarize: vi.fn(async (request: SummarizeRequest, runtime: SummarizeRuntime) => {
+    seen.request = request;
+    seen.runtime = runtime;
+    return {
+      kind: "asset-summary",
+      input: {
+        kind: "asset",
+        sourceKind: "file",
+        source: "/tmp/stdin.png",
+        mediaType: "image/png",
+        filename: "stdin.png",
+      },
+      details: { kind: "summary" },
+    };
   }),
+}));
+vi.mock("../src/run/flows/asset/summary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/run/flows/asset/summary.js")>()),
+  presentAssetSummary: vi.fn(async () => {}),
 }));
 
 import { runCli } from "../src/run.js";
 
 const noopStream = () =>
   new Writable({
-    write(chunk, encoding, callback) {
-      void chunk;
-      void encoding;
+    write(_chunk, _encoding, callback) {
       callback();
     },
   });
 
 describe("cli stdin binary routing", () => {
   afterEach(() => {
-    seen.filePath = null;
-    seen.bytes = null;
+    seen.request = null;
+    seen.runtime = null;
   });
 
-  it("routes binary stdin through a temp file without text coercion", async () => {
+  it("passes stdin unchanged to application-owned acquisition", async () => {
     const pngBytes = Buffer.from(
-      "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000100ffff03000006000557bf840000000049454e44ae426082",
+      "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489",
       "hex",
     );
+    const stdin = Readable.from([pngBytes]);
 
     await runCli(["-"], {
       env: { HOME: "/tmp" },
       fetch: vi.fn() as unknown as typeof fetch,
-      stdin: Readable.from([pngBytes]),
+      stdin,
       stdout: noopStream(),
       stderr: noopStream(),
     });
 
-    expect(seen.filePath).toBeTruthy();
-    expect(extname(seen.filePath ?? "")).toBe(".png");
-    expect(Buffer.compare(seen.bytes ?? Buffer.alloc(0), pngBytes)).toBe(0);
-    await expect(access(seen.filePath ?? "")).rejects.toThrow();
+    expect(seen.request?.input).toEqual({ kind: "stdin" });
+    expect(seen.runtime?.stdin).toBe(stdin);
   });
 });

@@ -11,7 +11,10 @@ export type InputTarget =
   | { kind: "file"; filePath: string }
   | { kind: "stdin" };
 
-export type UrlKind = { kind: "website" } | { kind: "asset" } | { kind: "media" };
+export type UrlKind =
+  | { kind: "website" }
+  | { kind: "asset" }
+  | { kind: "media"; mediaType: string };
 
 export type AssetAttachment = {
   mediaType: string;
@@ -80,7 +83,7 @@ function isLikelyAssetMediaType(mediaType: string | null): boolean {
   return true;
 }
 
-function isTranscribableMediaType(mediaType: string | null): boolean {
+function isTranscribableMediaType(mediaType: string | null): mediaType is string {
   if (!mediaType) return false;
   return mediaType.startsWith("audio/") || mediaType.startsWith("video/");
 }
@@ -103,7 +106,7 @@ function parseContentDispositionFilename(header: string | null): string | null {
 
 function classifyResponseHeaders(headers: Headers): UrlKind | null {
   const mediaType = normalizeHeaderMediaType(headers.get("content-type"));
-  if (isTranscribableMediaType(mediaType)) return { kind: "media" };
+  if (isTranscribableMediaType(mediaType)) return { kind: "media", mediaType };
 
   const filename = parseContentDispositionFilename(headers.get("content-disposition"));
   const filenameMediaType = filename ? normalizeHeaderMediaType(mime.getType(filename)) : null;
@@ -111,7 +114,7 @@ function classifyResponseHeaders(headers: Headers): UrlKind | null {
     (!mediaType || mediaType === "application/octet-stream") &&
     isTranscribableMediaType(filenameMediaType)
   ) {
-    return { kind: "media" };
+    return { kind: "media", mediaType: filenameMediaType };
   }
   if (isLikelyAssetMediaType(mediaType)) return { kind: "asset" };
   if (filename && isLikelyAssetPathname(filename)) return { kind: "asset" };

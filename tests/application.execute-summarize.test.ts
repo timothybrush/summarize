@@ -3,6 +3,7 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { AssetLikeHtmlFetchError } from "../packages/core/src/content/index.js";
 import type { ExtractedLinkContent } from "../src/content/index.js";
@@ -939,12 +940,161 @@ describe("executeSummarize", () => {
     expect(mocks.executeUrlFlow).toHaveBeenCalledOnce();
   });
 
+  it("keeps header-detected video URLs in the URL flow when slides are requested", async () => {
+    mocks.executeUrlFlow.mockReset();
+    mocks.executeUrlFlow.mockImplementationOnce(async ({ ctx }) => {
+      ctx.hooks.onExtracted?.(extracted);
+      return {
+        kind: "delegated-summary",
+        extracted,
+        slides: null,
+        summary: {
+          kind: "summary",
+          outcome: "model",
+          summary: "Header video summary.",
+          summaryEmitted: false,
+          summaryFromCache: false,
+          prompt: "Prompt",
+          extracted: {
+            kind: "asset",
+            source: extracted.url,
+            mediaType: "text/plain",
+            filename: null,
+          },
+          footerParts: [],
+          llm: {
+            provider: "openai",
+            model: "openai/gpt-5.4",
+            maxCompletionTokens: 256,
+            strategy: "single",
+          },
+        },
+      };
+    });
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "HEAD") throw new Error("video body should not be downloaded");
+      return new Response(null, {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      });
+    }) as typeof fetch;
+
+    const result = await executeSummarize(
+      {
+        input: {
+          kind: "input-url",
+          url: "https://example.com/download?id=video",
+          title: null,
+          maxCharacters: null,
+        },
+        modelOverride: "openai/gpt-5.4",
+        promptOverride: null,
+        lengthRaw: null,
+        languageRaw: null,
+        format: "text",
+        overrides: createEmptyRunOverrides(),
+        extractOnly: false,
+        slides: {
+          enabled: true,
+          ocr: false,
+          outputDir: "/tmp/slides",
+          sceneThreshold: 0.3,
+          autoTuneThreshold: true,
+          maxSlides: 6,
+          minDurationSeconds: 2,
+        },
+      },
+      {
+        runId: "raw-header-video-slides",
+        env: {},
+        fetch: fetchImpl,
+        execFile: execFile as unknown as ExecFileFn,
+        cache: { mode: "bypass", store: null, ttlMs: 0, maxBytes: 0, path: null },
+        mediaCache: null,
+      },
+      undefined,
+      createPreparedInputResources({ fetchImpl }),
+    );
+
+    expect(result).toMatchObject({ kind: "summary", summary: "Header video summary." });
+    expect(mocks.executeUrlFlow).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: "local audio",
+      input: { kind: "file" as const, filePath: "/tmp/episode.mp3" },
+    },
+    {
+      label: "remote audio",
+      input: {
+        kind: "input-url" as const,
+        url: "https://example.com/episode.mp3",
+        title: null,
+        maxCharacters: null,
+      },
+    },
+  ])("keeps $label on media execution when slides are requested", async ({ input }) => {
+    mocks.executeUrlFlow.mockReset();
+    mocks.executeMediaFile.mockClear();
+    mocks.executeMediaFile.mockImplementationOnce(async () => ({
+      kind: "extraction",
+      extracted,
+    }));
+
+    const result = await executeSummarize(
+      {
+        input,
+        modelOverride: "openai/gpt-5.4",
+        promptOverride: null,
+        lengthRaw: null,
+        languageRaw: null,
+        format: "text",
+        overrides: createEmptyRunOverrides(),
+        extractOnly: true,
+        slides: {
+          enabled: true,
+          ocr: false,
+          outputDir: "/tmp/slides",
+          sceneThreshold: 0.3,
+          autoTuneThreshold: true,
+          maxSlides: 6,
+          minDurationSeconds: 2,
+        },
+      },
+      {
+        runId: "raw-audio-slides",
+        env: { OPENAI_API_KEY: "test-key" },
+        fetch: async () => {
+          throw new Error("audio body should not be fetched");
+        },
+        execFile: execFile as unknown as ExecFileFn,
+        cache: { mode: "bypass", store: null, ttlMs: 0, maxBytes: 0, path: null },
+        mediaCache: null,
+      },
+    );
+
+    expect(result.kind).toBe("asset-media");
+    expect(mocks.executeMediaFile).toHaveBeenCalledOnce();
+    expect(mocks.executeUrlFlow).not.toHaveBeenCalled();
+  });
+
   it("recovers asset-like website failures through remote acquisition", async () => {
     mocks.executeUrlFlow.mockReset();
     mocks.executeUrlFlow.mockRejectedValueOnce(
       new AssetLikeHtmlFetchError("content-type", "application/pdf"),
     );
     mockAssetSummary("Recovered asset summary.");
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "HEAD" || new Headers(init?.headers).has("range")) {
+        return new Response(null, { status: 503 });
+      }
+      return new Response("%PDF-1.4\n", {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }) as typeof fetch;
     const result = await executeSummarize(
       {
         input: {
@@ -965,11 +1115,7 @@ describe("executeSummarize", () => {
       {
         runId: "raw-url-recovery",
         env: { OPENAI_API_KEY: "test-key" },
-        fetch: async () =>
-          new Response("%PDF-1.4\n", {
-            status: 200,
-            headers: { "content-type": "application/pdf" },
-          }),
+        fetch: fetchImpl,
         execFile: execFile as unknown as ExecFileFn,
         cache: { mode: "bypass", store: null, ttlMs: 0, maxBytes: 0, path: null },
         mediaCache: null,
@@ -981,6 +1127,97 @@ describe("executeSummarize", () => {
       summary: "Recovered asset summary.",
     });
     expect(mocks.executeUrlFlow).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("materializes fallback video downloads for slide extraction", async () => {
+    mocks.executeUrlFlow.mockReset();
+    mocks.executeMediaFile.mockClear();
+    let materializedPath: string | null = null;
+    mocks.executeUrlFlow
+      .mockRejectedValueOnce(new AssetLikeHtmlFetchError("content-type", "video/mp4"))
+      .mockImplementationOnce(async ({ ctx, url }) => {
+        materializedPath = fileURLToPath(url);
+        expect(path.extname(materializedPath)).toBe(".mp4");
+        await expect(access(materializedPath)).resolves.toBeUndefined();
+        ctx.hooks.onExtracted?.(extracted);
+        return {
+          kind: "delegated-summary",
+          extracted,
+          slides: null,
+          summary: {
+            kind: "summary",
+            outcome: "model",
+            summary: "Recovered video summary.",
+            summaryEmitted: false,
+            summaryFromCache: false,
+            prompt: "Prompt",
+            extracted: {
+              kind: "asset",
+              source: url,
+              mediaType: "video/mp4",
+              filename: path.basename(materializedPath),
+            },
+            footerParts: [],
+            llm: {
+              provider: "openai",
+              model: "openai/gpt-5.4",
+              maxCompletionTokens: 256,
+              strategy: "single",
+            },
+          },
+        };
+      });
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "HEAD" || new Headers(init?.headers).has("range")) {
+        return new Response(null, { status: 503 });
+      }
+      return new Response("video", {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      });
+    }) as typeof fetch;
+
+    const result = await executeSummarize(
+      {
+        input: {
+          kind: "input-url",
+          url: "https://example.com/download?id=video",
+          title: null,
+          maxCharacters: null,
+        },
+        modelOverride: "openai/gpt-5.4",
+        promptOverride: null,
+        lengthRaw: null,
+        languageRaw: null,
+        format: "text",
+        overrides: createEmptyRunOverrides(),
+        extractOnly: false,
+        slides: {
+          enabled: true,
+          ocr: false,
+          outputDir: "/tmp/slides",
+          sceneThreshold: 0.3,
+          autoTuneThreshold: true,
+          maxSlides: 6,
+          minDurationSeconds: 2,
+        },
+      },
+      {
+        runId: "raw-url-video-recovery",
+        env: { OPENAI_API_KEY: "test-key" },
+        fetch: fetchImpl,
+        execFile: execFile as unknown as ExecFileFn,
+        cache: { mode: "bypass", store: null, ttlMs: 0, maxBytes: 0, path: null },
+        mediaCache: null,
+      },
+    );
+
+    expect(result).toMatchObject({ kind: "summary", summary: "Recovered video summary." });
+    expect(mocks.executeUrlFlow).toHaveBeenCalledTimes(2);
+    expect(mocks.executeMediaFile).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    await expect(access(materializedPath ?? "")).rejects.toThrow();
   });
 
   it("retries website execution with Firecrawl after an asset acquisition miss", async () => {

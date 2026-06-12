@@ -2,9 +2,7 @@ import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { createRunFlowContexts } from "../src/application/flow-contexts.js";
 import type { CacheState } from "../src/cache.js";
-import type { AssetSummaryContext } from "../src/run/flows/asset/types.js";
 import type { UrlFlowContext } from "../src/run/flows/url/types.js";
-import { createRunnerAssetInputContext } from "../src/run/runner-asset-context.js";
 
 const createWritable = () =>
   new Writable({
@@ -96,42 +94,5 @@ describe("run flow contexts", () => {
     expect(urlFlowContext.cache).toBe(cacheState);
     expect(urlFlowContext.hooks.onModelChosen).toBe(onModelChosen);
     expect(typeof urlFlowContext.hooks.summarizeAsset).toBe("function");
-  });
-
-  it("keeps media-file handling in the CLI adapter", async () => {
-    const summarizeAssetImpl = vi.fn(async () => ({}) as never);
-    const summarizeMediaFileImpl = vi.fn(async () => {});
-    const assetSummaryContext = {
-      env: {},
-      envForRun: {},
-      stderr: createWritable(),
-      timeoutMs: 1_000,
-    } as unknown as AssetSummaryContext;
-    const inputContext = createRunnerAssetInputContext({
-      summarizeAssetImpl,
-      summarizeMediaFileImpl,
-      assetSummaryContext,
-      progressEnabled: true,
-      trackedFetch: vi.fn() as unknown as typeof fetch,
-      setClearProgressBeforeStdout: vi.fn(),
-      clearProgressIfCurrent: vi.fn(),
-    });
-    const args = {
-      sourceKind: "file" as const,
-      sourceLabel: "/tmp/audio.mp3",
-      attachment: {
-        kind: "file" as const,
-        filename: "audio.mp3",
-        mediaType: "audio/mpeg",
-        bytes: new Uint8Array(),
-      },
-    };
-
-    await inputContext.summarizeMediaFile?.(args);
-    await inputContext.summarizeAsset(args);
-
-    expect(summarizeMediaFileImpl).toHaveBeenCalledWith(args);
-    expect(summarizeAssetImpl).toHaveBeenCalledWith(args);
-    expect(inputContext.progressEnabled).toBe(true);
   });
 });

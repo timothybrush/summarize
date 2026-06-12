@@ -75,7 +75,7 @@ describe("application input acquisition", () => {
         fetchImpl,
         timeoutMs: 1000,
       }),
-    ).resolves.toBe("media");
+    ).resolves.toBe("audio");
     await expect(
       resolveUrlAssetRoute({
         url: "https://example.com/article?id=123",
@@ -89,11 +89,15 @@ describe("application input acquisition", () => {
       resolveUrlAssetRoute({
         url: "https://example.com/article?id=123",
         isYoutubeUrl: false,
-        fetchImpl,
+        fetchImpl: async () =>
+          new Response(null, {
+            status: 200,
+            headers: { "content-type": "video/mp4" },
+          }),
         timeoutMs: 1000,
         assumeAsset: true,
       }),
-    ).resolves.toBe("asset");
+    ).resolves.toBe("video");
     await expect(
       resolveUrlAssetRoute({
         url: "https://example.com/download?id=audio",
@@ -105,7 +109,7 @@ describe("application input acquisition", () => {
           }),
         timeoutMs: 1000,
       }),
-    ).resolves.toBe("media");
+    ).resolves.toBe("audio");
     await expect(
       resolveUrlAssetRoute({
         url: "https://example.com/download?id=generic-audio",
@@ -120,7 +124,7 @@ describe("application input acquisition", () => {
           }),
         timeoutMs: 1000,
       }),
-    ).resolves.toBe("media");
+    ).resolves.toBe("audio");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

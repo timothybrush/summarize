@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { createSummarizeExecutionResources } from "../application/execution-resources.js";
+import { isTranscribableAssetPath } from "../application/input-acquisition.js";
 import { resolveSummarizeRun } from "../application/run-spec.js";
 import { type CacheState } from "../cache.js";
 import type { ExecFileFn } from "../markitdown.js";
@@ -10,21 +11,16 @@ import {
   resolveTrueColor,
 } from "../tty/theme.js";
 import { createCacheStateFromConfig } from "./cache-state.js";
-import {
-  createCliResolvedAssetExecutor,
-  createCliUrlSummaryExecutor,
-} from "./cli-summarize-execution.js";
+import { createCliInputProgress } from "./cli-input-progress.js";
+import { createCliSummarizeExecutor } from "./cli-summarize-execution.js";
 import { createCliSummarizeResolution } from "./cli-summarize-request.js";
 import { parseCliProviderArg } from "./env.js";
-import { isPdfExtension, isTranscribableExtension } from "./flows/asset/input.js";
 import { writeVerbose } from "./logging.js";
 import { createMediaCacheFromConfig } from "./media-cache-state.js";
 import type { PerfTrace } from "./perf-trace.js";
 import { createProgressGate } from "./progress.js";
 import { resolveRunInput } from "./run-input.js";
 import { resolveStreamSettings } from "./run-stream.js";
-import { createRunnerAssetInputContext } from "./runner-asset-context.js";
-import { executeRunnerInput } from "./runner-execution.js";
 import { resolveRunnerFlags } from "./runner-flags.js";
 import { resolveRunnerSlidesSettings } from "./runner-slides.js";
 import { createTerminalSummaryStream } from "./summary-stream.js";
@@ -119,8 +115,8 @@ export async function createRunnerPlan(options: {
     stderr.write("Warning: --length is ignored with --extract (no summary is generated).\n");
   }
   const isDirectMediaInput =
-    (inputTarget.kind === "file" && isTranscribableExtension(inputTarget.filePath)) ||
-    (inputTarget.kind === "url" && isTranscribableExtension(inputTarget.url));
+    (inputTarget.kind === "file" && isTranscribableAssetPath(inputTarget.filePath)) ||
+    (inputTarget.kind === "url" && isTranscribableAssetPath(inputTarget.url));
   if (diarizationMode && !isYoutubeUrl && !isDirectMediaInput) {
     throw new Error("--diarize requires a YouTube URL or a direct audio/video file");
   }
@@ -232,32 +228,12 @@ export async function createRunnerPlan(options: {
     enabled: verboseColor,
     trueColor: resolveTrueColor(envForRun),
   });
-  const renderSpinnerStatus = (label: string, detail = "…") =>
-    `${themeForStderr.label(label)}${themeForStderr.dim(detail)}`;
-  const renderSpinnerStatusWithModel = (label: string, modelId: string) =>
-    `${themeForStderr.label(label)}${themeForStderr.dim(" (model: ")}${themeForStderr.accent(
-      modelId,
-    )}${themeForStderr.dim(")…")}`;
   const { streamingEnabled } = resolveStreamSettings({
     streamMode,
     stdout,
     json,
     extractMode,
   });
-
-  if (
-    extractMode &&
-    inputTarget.kind === "file" &&
-    !isTranscribableExtension(inputTarget.filePath) &&
-    !isPdfExtension(inputTarget.filePath)
-  ) {
-    throw new Error(
-      "--extract for local files is only supported for media files (MP3, MP4, WAV, etc.) and PDF files",
-    );
-  }
-  if (extractMode && inputTarget.kind === "stdin") {
-    throw new Error("--extract is not supported for piped stdin input");
-  }
 
   const progressEnabled = isRichTty(stderr) && !verbose && !json;
   const progressGate = createProgressGate();
@@ -336,9 +312,8 @@ export async function createRunnerPlan(options: {
     trace: (name, detail) => perfTrace?.mark(name, detail),
     perfTrace,
   });
-  const { apiStatus, metrics } = executionResources.modelResources.runtime;
-  const { trackedFetch, buildReport, estimateCostUsd } = metrics;
-  const { assetSummaryContext, urlFlowContext } = executionResources;
+  const { apiStatus } = executionResources.modelResources.runtime;
+  const { assetSummaryContext } = executionResources;
   const summarizeRuntime = {
     runId: `cli-${runStartedAtMs}`,
     env,
@@ -346,18 +321,32 @@ export async function createRunnerPlan(options: {
     execFile: execFileImpl,
     cache: executionResources.cacheState,
     mediaCache,
+    stdin: stdin ?? process.stdin,
   };
-  const executeUrlSummary = createCliUrlSummaryExecutor({
-    baseRequest: summarizeResolution.request,
-    runtime: summarizeRuntime,
+  const request = {
+    ...summarizeResolution.request,
+    input:
+      summarizeResolution.request.input.kind === "input-url"
+        ? {
+            ...summarizeResolution.request.input,
+            maxCharacters: extractMode ? maxExtractCharacters : null,
+          }
+        : summarizeResolution.request.input,
     slides: slidesSettings,
-    maxExtractCharacters: extractMode ? maxExtractCharacters : null,
+  };
+  const inputProgress = createCliInputProgress({
+    env,
+    envForRun,
+    stderr,
+    enabled: progressEnabled,
+    progressGate,
   });
-  const resolvedAsset = createCliResolvedAssetExecutor({
-    baseRequest: summarizeResolution.request,
+  const execute = createCliSummarizeExecutor({
+    request,
     runtime: summarizeRuntime,
     prepared: executionResources,
     presentationContext: assetSummaryContext,
+    progress: inputProgress,
     extractionOutputContext: {
       io: { env, envForRun, stdout, stderr },
       flags: {
@@ -377,35 +366,11 @@ export async function createRunnerPlan(options: {
       apiStatus,
     },
   });
-  const assetInputContext = createRunnerAssetInputContext({
-    summarizeAssetImpl: resolvedAsset.summarize,
-    summarizeMediaFileImpl: resolvedAsset.media,
-    assetSummaryContext,
-    progressEnabled,
-    trackedFetch,
-    setClearProgressBeforeStdout,
-    clearProgressIfCurrent,
-  });
 
   return {
     cacheState,
     execute: async () => {
-      await executeRunnerInput({
-        inputTarget,
-        stdin: stdin ?? process.stdin,
-        handleFileInputContext: assetInputContext,
-        url,
-        isYoutubeUrl,
-        withUrlAssetContext: assetInputContext,
-        slidesEnabled: Boolean(slidesSettings),
-        extractMode,
-        progressEnabled,
-        renderSpinnerStatus,
-        renderSpinnerStatusWithModel,
-        resolvedAsset,
-        runUrlFlowContext: urlFlowContext,
-        executeUrlSummary,
-      });
+      await execute();
     },
   };
 }
