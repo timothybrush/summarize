@@ -1,6 +1,7 @@
 import { Writable } from "node:stream";
 import type { SummarizeConfig } from "../config.js";
 import type { SummaryStreamHandler } from "../engine/events.js";
+import { executeAssetSummary } from "../run/flows/asset/summary.js";
 import type { UrlFlowContext } from "../run/flows/url/types.js";
 import {
   buildPromptLengthInstruction,
@@ -257,7 +258,7 @@ export function createSummarizeUrlFlowContext(args: {
     buildReport: metrics.buildReport,
     estimateCostUsd: metrics.estimateCostUsd,
   };
-  const { urlFlowContext } = createRunFlowContexts({
+  const { assetSummaryContext, urlFlowContext } = createRunFlowContexts({
     cacheState: urlCache,
     mediaCache,
     io,
@@ -278,5 +279,11 @@ export function createSummarizeUrlFlowContext(args: {
     assetSummaryOverrides: { format: "text" },
   });
 
-  return urlFlowContext;
+  return {
+    ...urlFlowContext,
+    hooks: {
+      ...urlFlowContext.hooks,
+      summarizeAsset: (args) => executeAssetSummary(assetSummaryContext, args),
+    },
+  };
 }

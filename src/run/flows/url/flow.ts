@@ -17,6 +17,7 @@ import {
 } from "../../format.js";
 import { writeVerbose } from "../../logging.js";
 import { createRunScopedMediaCache } from "../../run-media-cache.js";
+import type { AssetSummaryResult } from "../asset/types.js";
 import { deriveExtractionUi, logExtractionDiagnostics } from "./extract.js";
 import { createUrlExtractionSession } from "./extraction-session.js";
 import { createUrlFlowProgress, writeSlidesBackgroundFailureWarning } from "./flow-progress.js";
@@ -45,6 +46,7 @@ type UrlFlowPresentationState = {
 export type UrlFlowResult =
   | (UrlFlowResultBase & {
       kind: "delegated-summary";
+      summary: AssetSummaryResult;
     })
   | (UrlFlowResultBase & {
       kind: "extraction";
@@ -275,6 +277,7 @@ async function runUrlFlowPhases({
           kind: "delegated-summary",
           extracted: videoOnlyResult.extracted,
           slides: videoOnlyResult.slides,
+          summary: videoOnlyResult.summary,
         },
         null,
       );

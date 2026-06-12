@@ -137,6 +137,14 @@ function emitResolvedSummary({
   return resolution.normalizedSummary;
 }
 
+function emitNormalizedSummary(summary: string, emit: SummarizeEventSink) {
+  const normalized = summary.replace(/^\n+/, "");
+  emit({
+    type: "summary-delta",
+    text: normalized.endsWith("\n") ? normalized : `${normalized}\n`,
+  });
+}
+
 export async function executeSummarize(
   request: SummarizeRequest,
   runtime: SummarizeRuntime,
@@ -214,6 +222,11 @@ export async function executeSummarize(
             extracted,
             emit,
           });
+        } else {
+          normalizedSummary = urlResult.summary.summary;
+          if (!urlResult.summary.summaryEmitted) {
+            emitNormalizedSummary(normalizedSummary, emit);
+          }
         }
       }
     }

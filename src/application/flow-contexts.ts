@@ -101,6 +101,7 @@ export function createRunFlowContexts(options: {
       restoreProgressAfterStdout: runtimeHooks.restoreProgressAfterStdout,
       buildReport: runtimeHooks.buildReport,
       estimateCostUsd: runtimeHooks.estimateCostUsd,
+      onSummaryCached: eventHooks?.onSummaryCached ?? null,
     },
     cache: {
       cache: cacheState,

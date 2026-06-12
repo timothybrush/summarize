@@ -17,7 +17,7 @@ import {
   resolveTrueColor,
 } from "../../../tty/theme.js";
 import { assertAssetMediaTypeSupported } from "../../attachments.js";
-import type { SummarizeAssetArgs } from "./types.js";
+import type { AssetSummaryResult, SummarizeAssetArgs } from "./types.js";
 
 /**
  * Check if a media type should route through transcription.
@@ -149,7 +149,7 @@ export type AssetInputContext = {
   progressEnabled: boolean;
   timeoutMs: number;
   trackedFetch: typeof fetch;
-  summarizeAsset: (args: SummarizeAssetArgs) => Promise<void>;
+  summarizeAsset: (args: SummarizeAssetArgs) => Promise<AssetSummaryResult>;
   summarizeMediaFile?: (args: SummarizeAssetArgs) => Promise<void>;
   setClearProgressBeforeStdout: (fn: (() => undefined | (() => void)) | null) => void;
   clearProgressIfCurrent: (fn: () => void) => void;

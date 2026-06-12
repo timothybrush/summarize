@@ -5,6 +5,7 @@ import type { MediaCache } from "../../../content/index.js";
 import type { LlmCall, RunMetricsReport } from "../../../costs.js";
 import type { SummaryStreamHandler } from "../../../engine/events.js";
 import type { createModelExecutor } from "../../../engine/model-executor.js";
+import type { ModelMeta } from "../../../engine/types.js";
 import type { OutputLanguage } from "../../../language.js";
 import type { ExecFileFn } from "../../../markitdown.js";
 import type { FixedModelSpec, RequestedModel } from "../../../model-spec.js";
@@ -58,6 +59,7 @@ export type AssetSummaryContext = {
   plain: boolean;
   summaryEngine: ReturnType<typeof createModelExecutor>;
   summaryStream: SummaryStreamHandler | null;
+  onSummaryCached?: ((cached: boolean) => void) | null;
   trackedFetch: typeof fetch;
   writeViaFooter: (parts: string[]) => void;
   clearProgressForStdout: () => void;
@@ -138,6 +140,7 @@ export type AssetSummaryContextInput = {
     | "restoreProgressAfterStdout"
     | "buildReport"
     | "estimateCostUsd"
+    | "onSummaryCached"
   >;
   cache: Pick<AssetSummaryContext, "cache" | "mediaCache">;
   apiStatus: AssetSummaryContext["apiStatus"];
@@ -148,4 +151,26 @@ export type SummarizeAssetArgs = {
   sourceLabel: string;
   attachment: AssetAttachment;
   onModelChosen?: ((modelId: string) => void) | null;
+};
+
+export type AssetSummaryResult = {
+  kind: "summary";
+  outcome: "model" | "short-content" | "token-fit" | "attempts-exhausted";
+  summary: string;
+  summaryEmitted: boolean;
+  summaryFromCache: boolean;
+  prompt: string;
+  extracted: {
+    kind: "asset";
+    source: string;
+    mediaType: string;
+    filename: string | null;
+  };
+  footerParts: string[];
+  llm: {
+    provider: ModelMeta["provider"];
+    model: string;
+    maxCompletionTokens: number | null;
+    strategy: "single";
+  } | null;
 };

@@ -18,7 +18,7 @@ import type {
 } from "../../../slides/index.js";
 import type { SpeakerIdentificationSettings } from "../../../speaker-identification/index.js";
 import type { PerfTrace } from "../../perf-trace.js";
-import type { SummarizeAssetArgs } from "../asset/types.js";
+import type { AssetSummaryResult, SummarizeAssetArgs } from "../asset/types.js";
 
 export type UrlFlowIo = {
   env: Record<string, string | undefined>;
@@ -93,7 +93,7 @@ export type UrlFlowHooks = {
   onLinkPreviewProgress?: ((event: LinkPreviewProgressEvent) => void) | null;
   onSummaryCached?: ((cached: boolean) => void) | null;
   setTranscriptionCost: (costUsd: number | null, label: string | null) => void;
-  summarizeAsset: (args: SummarizeAssetArgs) => Promise<void>;
+  summarizeAsset: (args: SummarizeAssetArgs) => Promise<AssetSummaryResult>;
   writeViaFooter: (parts: string[]) => void;
   clearProgressForStdout: () => void;
   restoreProgressAfterStdout?: (() => void) | null;

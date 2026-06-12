@@ -233,6 +233,27 @@ describe("handleVideoOnlyExtractedContent", () => {
     const writeViaFooter = vi.fn();
     const summarizeAsset = vi.fn(async ({ onModelChosen: reportModel }) => {
       reportModel?.("google/gemini-2.5-pro");
+      return {
+        kind: "summary" as const,
+        outcome: "model" as const,
+        summary: "Video summary.",
+        summaryEmitted: false,
+        summaryFromCache: false,
+        prompt: "Prompt",
+        extracted: {
+          kind: "asset" as const,
+          source: "https://cdn.example.com/video.mp4",
+          mediaType: "video/mp4",
+          filename: "video.mp4",
+        },
+        footerParts: [],
+        llm: {
+          provider: "google" as const,
+          model: "google/gemini-2.5-pro",
+          maxCompletionTokens: null,
+          strategy: "single" as const,
+        },
+      };
     });
     const updateSummaryProgress = vi.fn();
     const spinner = { setText: vi.fn() };
@@ -291,6 +312,7 @@ describe("handleVideoOnlyExtractedContent", () => {
       handled: true,
       extracted: baseExtracted,
       slides: { sourceId: "vid123", slides: [{ index: 1 }, { index: 2 }] },
+      summary: { summary: "Video summary.", llm: { model: "google/gemini-2.5-pro" } },
     });
     expect(onExtracted).toHaveBeenCalledWith(baseExtracted);
     expect(mocks.loadRemoteAsset).toHaveBeenCalledWith({

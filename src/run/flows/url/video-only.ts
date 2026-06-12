@@ -3,6 +3,7 @@ import { type ExtractedLinkContent } from "../../../content/index.js";
 import type { SlideExtractionResult } from "../../../slides/index.js";
 import { assertAssetMediaTypeSupported } from "../../attachments.js";
 import { writeVerbose } from "../../logging.js";
+import type { AssetSummaryResult } from "../asset/types.js";
 import { deriveExtractionUi, type UrlExtractionUi } from "./extract.js";
 import type { UrlFlowContext } from "./types.js";
 
@@ -11,6 +12,7 @@ export type VideoOnlyResult =
       handled: true;
       extracted: ExtractedLinkContent;
       slides: SlideExtractionResult | null;
+      summary: AssetSummaryResult;
     }
   | {
       handled: false;
@@ -95,7 +97,7 @@ export async function handleVideoOnlyExtractedContent({
 
   let chosenModel: string | null = null;
   if (flags.progressEnabled) spinner.setText(renderStatus("Summarizing video"));
-  await hooks.summarizeAsset({
+  const summary = await hooks.summarizeAsset({
     sourceKind: "asset-url",
     sourceLabel: loadedVideo.sourceLabel,
     attachment: loadedVideo.attachment,
@@ -115,5 +117,5 @@ export async function handleVideoOnlyExtractedContent({
     ...(slideCount != null ? [`slides ${slideCount}`] : []),
   ]);
   updateSummaryProgress();
-  return { handled: true, extracted, slides: directVideoSlides };
+  return { handled: true, extracted, slides: directVideoSlides, summary };
 }

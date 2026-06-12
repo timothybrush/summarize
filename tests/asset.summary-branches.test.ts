@@ -13,7 +13,11 @@ vi.mock("../src/engine/model-attempts.js", () => ({
   runModelAttempts: mocks.runModelAttempts,
 }));
 
-import { summarizeAsset } from "../src/run/flows/asset/summary.js";
+import {
+  executeAssetSummary,
+  presentAssetSummary,
+  summarizeAsset,
+} from "../src/run/flows/asset/summary.js";
 
 const collectStream = () => {
   let text = "";
@@ -122,7 +126,7 @@ describe("asset summary early branches", () => {
 
     const { ctx, stdout, writeViaFooter } = createContext();
 
-    await summarizeAsset(ctx, {
+    const args = {
       sourceKind: "file",
       sourceLabel: "/tmp/note.txt",
       attachment: {
@@ -131,8 +135,12 @@ describe("asset summary early branches", () => {
         filename: "note.txt",
         bytes: new Uint8Array([1]),
       },
-    });
+    } as const;
+    const result = await executeAssetSummary(ctx, args);
 
+    expect(result).toMatchObject({ outcome: "short-content", summary: "Short text.", llm: null });
+    expect(stdout.getText()).toBe("");
+    await presentAssetSummary(ctx, args, result);
     expect(stdout.getText()).toContain("Short text.");
     expect(writeViaFooter).not.toHaveBeenCalled();
   });
@@ -242,7 +250,7 @@ describe("asset summary early branches", () => {
 
     const { ctx, stdout } = createContext({ json: true });
 
-    await summarizeAsset(ctx, {
+    const args = {
       sourceKind: "asset-url",
       sourceLabel: "https://example.com/video.mp4",
       attachment: {
@@ -251,8 +259,16 @@ describe("asset summary early branches", () => {
         filename: "video.mp4",
         bytes: new Uint8Array([1]),
       },
-    });
+    } as const;
+    const result = await executeAssetSummary(ctx, args);
 
+    expect(result).toMatchObject({
+      outcome: "model",
+      summary: "Model summary.",
+      llm: { provider: "openai", model: "openai/gpt-5.2" },
+    });
+    expect(stdout.getText()).toBe("");
+    await presentAssetSummary(ctx, args, result);
     const payload = JSON.parse(stdout.getText()) as {
       input: { kind: string };
       summary?: string;

@@ -26,7 +26,12 @@ import { prepareMarkdownForTerminal } from "../../markdown.js";
 import { isRichTty, markdownRenderWidth, supportsColor } from "../../terminal.js";
 import { prepareAssetPrompt } from "./preprocess.js";
 import { buildAssetCliContext, buildAssetModelAttempts } from "./summary-attempts.js";
-import type { AssetSummaryContext, AssetSummaryContextInput, SummarizeAssetArgs } from "./types.js";
+import type {
+  AssetSummaryContext,
+  AssetSummaryContextInput,
+  AssetSummaryResult,
+  SummarizeAssetArgs,
+} from "./types.js";
 
 function shouldBypassShortContentSummary({
   ctx,
@@ -47,66 +52,76 @@ function shouldBypassShortContentSummary({
   return true;
 }
 
-async function outputBypassedAssetSummary({
-  ctx,
-  args,
-  promptText,
-  summaryText,
-  assetFooterParts,
-  footerLabel,
-}: {
-  ctx: AssetSummaryContext;
-  args: SummarizeAssetArgs;
-  promptText: string;
-  summaryText: string;
-  assetFooterParts: string[];
-  footerLabel: string;
-}) {
-  const summary = summaryText.trimEnd();
-  const extracted = {
+function buildAssetExtracted(args: SummarizeAssetArgs): AssetSummaryResult["extracted"] {
+  return {
     kind: "asset" as const,
     source: args.sourceLabel,
     mediaType: args.attachment.mediaType,
     filename: args.attachment.filename,
   };
+}
+
+function buildAssetJsonInput(ctx: AssetSummaryContext, args: SummarizeAssetArgs) {
+  const shared = {
+    timeoutMs: ctx.timeoutMs,
+    length:
+      ctx.lengthArg.kind === "preset"
+        ? { kind: "preset" as const, preset: ctx.lengthArg.preset }
+        : { kind: "chars" as const, maxCharacters: ctx.lengthArg.maxCharacters },
+    maxOutputTokens: ctx.maxOutputTokensArg,
+    model: ctx.requestedModelLabel,
+    language: formatOutputLanguageForJson(ctx.outputLanguage),
+  };
+  return args.sourceKind === "file"
+    ? { kind: "file" as const, filePath: args.sourceLabel, ...shared }
+    : { kind: "asset-url" as const, url: args.sourceLabel, ...shared };
+}
+
+async function writeAssetMetrics(ctx: AssetSummaryContext, result: AssetSummaryResult) {
+  const report = ctx.shouldComputeReport ? await ctx.buildReport() : null;
+  if (!ctx.metricsEnabled || !report) return report;
+  const costUsd = await ctx.estimateCostUsd();
+  writeFinishLine({
+    stderr: ctx.stderr,
+    env: ctx.envForRun,
+    elapsedMs: Date.now() - ctx.runStartedAtMs,
+    elapsedLabel: result.summaryFromCache ? "Cached" : null,
+    model: result.llm?.model ?? null,
+    report,
+    costUsd,
+    detailed: ctx.metricsDetailed,
+    extraParts: null,
+    color: ctx.verboseColor,
+  });
+  return report;
+}
+
+export async function presentAssetSummary(
+  ctx: AssetSummaryContext,
+  args: SummarizeAssetArgs,
+  result: AssetSummaryResult,
+) {
+  if (result.outcome === "attempts-exhausted") {
+    ctx.clearProgressForStdout();
+    ctx.stdout.write(`${result.summary}\n`);
+    ctx.restoreProgressAfterStdout?.();
+    if (result.footerParts.length > 0) {
+      ctx.writeViaFooter([...result.footerParts, "no model"]);
+    }
+    return;
+  }
 
   if (ctx.json) {
     ctx.clearProgressForStdout();
     const finishReport = ctx.shouldComputeReport ? await ctx.buildReport() : null;
-    const input =
-      args.sourceKind === "file"
-        ? {
-            kind: "file",
-            filePath: args.sourceLabel,
-            timeoutMs: ctx.timeoutMs,
-            length:
-              ctx.lengthArg.kind === "preset"
-                ? { kind: "preset", preset: ctx.lengthArg.preset }
-                : { kind: "chars", maxCharacters: ctx.lengthArg.maxCharacters },
-            maxOutputTokens: ctx.maxOutputTokensArg,
-            model: ctx.requestedModelLabel,
-            language: formatOutputLanguageForJson(ctx.outputLanguage),
-          }
-        : {
-            kind: "asset-url",
-            url: args.sourceLabel,
-            timeoutMs: ctx.timeoutMs,
-            length:
-              ctx.lengthArg.kind === "preset"
-                ? { kind: "preset", preset: ctx.lengthArg.preset }
-                : { kind: "chars", maxCharacters: ctx.lengthArg.maxCharacters },
-            maxOutputTokens: ctx.maxOutputTokensArg,
-            model: ctx.requestedModelLabel,
-            language: formatOutputLanguageForJson(ctx.outputLanguage),
-          };
     const payload = {
-      input,
+      input: buildAssetJsonInput(ctx, args),
       env: buildRunJsonEnv(ctx.apiStatus),
-      extracted,
-      prompt: promptText,
-      llm: null,
+      extracted: result.extracted,
+      prompt: result.prompt,
+      llm: result.llm,
       metrics: ctx.metricsEnabled ? finishReport : null,
-      summary,
+      summary: result.summary,
     };
     ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     ctx.restoreProgressAfterStdout?.();
@@ -116,8 +131,8 @@ async function outputBypassedAssetSummary({
         stderr: ctx.stderr,
         env: ctx.envForRun,
         elapsedMs: Date.now() - ctx.runStartedAtMs,
-        elapsedLabel: null,
-        model: null,
+        elapsedLabel: result.summaryFromCache ? "Cached" : null,
+        model: result.llm?.model ?? null,
         report: finishReport,
         costUsd,
         detailed: ctx.metricsDetailed,
@@ -128,46 +143,42 @@ async function outputBypassedAssetSummary({
     return;
   }
 
-  ctx.clearProgressForStdout();
-  const rendered =
-    !ctx.plain && isRichTty(ctx.stdout)
-      ? renderMarkdownAnsi(prepareMarkdownForTerminal(summary), {
-          width: markdownRenderWidth(ctx.stdout, ctx.env),
-          wrap: true,
-          color: supportsColor(ctx.stdout, ctx.envForRun),
-          hyperlinks: true,
-        })
-      : summary;
+  if (!result.summaryEmitted) {
+    ctx.clearProgressForStdout();
+    const rendered =
+      !ctx.plain && isRichTty(ctx.stdout)
+        ? renderMarkdownAnsi(prepareMarkdownForTerminal(result.summary), {
+            width: markdownRenderWidth(ctx.stdout, ctx.env),
+            wrap: true,
+            color: supportsColor(ctx.stdout, ctx.envForRun),
+            hyperlinks: true,
+          })
+        : result.summary;
 
-  if (!ctx.plain && isRichTty(ctx.stdout)) {
-    ctx.stdout.write(`\n${rendered.replace(/^\n+/, "")}`);
-  } else {
-    if (isRichTty(ctx.stdout)) ctx.stdout.write("\n");
-    ctx.stdout.write(rendered.replace(/^\n+/, ""));
-  }
-  if (!rendered.endsWith("\n")) {
-    ctx.stdout.write("\n");
-  }
-  ctx.restoreProgressAfterStdout?.();
-  if (assetFooterParts.length > 0) {
-    ctx.writeViaFooter([...assetFooterParts, footerLabel]);
+    if (!ctx.plain && isRichTty(ctx.stdout)) {
+      ctx.stdout.write(`\n${rendered.replace(/^\n+/, "")}`);
+    } else {
+      if (isRichTty(ctx.stdout)) ctx.stdout.write("\n");
+      ctx.stdout.write(rendered.replace(/^\n+/, ""));
+    }
+    if (!rendered.endsWith("\n")) {
+      ctx.stdout.write("\n");
+    }
+    ctx.restoreProgressAfterStdout?.();
   }
 
-  const report = ctx.shouldComputeReport ? await ctx.buildReport() : null;
-  if (ctx.metricsEnabled && report) {
-    const costUsd = await ctx.estimateCostUsd();
-    writeFinishLine({
-      stderr: ctx.stderr,
-      env: ctx.envForRun,
-      elapsedMs: Date.now() - ctx.runStartedAtMs,
-      elapsedLabel: null,
-      model: null,
-      report,
-      costUsd,
-      detailed: ctx.metricsDetailed,
-      extraParts: null,
-      color: ctx.verboseColor,
-    });
+  const footerLabel =
+    result.outcome === "model"
+      ? `model ${result.llm?.model ?? "unknown"}`
+      : result.outcome === "short-content"
+        ? "short content"
+        : "no model";
+  if (result.outcome === "model" || result.footerParts.length > 0) {
+    ctx.writeViaFooter([...result.footerParts, footerLabel]);
+  }
+
+  if (result.outcome !== "token-fit") {
+    await writeAssetMetrics(ctx, result);
   }
 }
 
@@ -183,7 +194,10 @@ export function createAssetSummaryContext(input: AssetSummaryContextInput): Asse
   };
 }
 
-export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAssetArgs) {
+export async function executeAssetSummary(
+  ctx: AssetSummaryContext,
+  args: SummarizeAssetArgs,
+): Promise<AssetSummaryResult> {
   const lastSuccessfulCliProvider = ctx.isFallbackModel
     ? await readLastSuccessfulCliProvider(ctx.envForRun)
     : null;
@@ -232,15 +246,17 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
     !ctx.isNamedModelSelection &&
     shouldBypassShortContentSummary({ ctx, textContent })
   ) {
-    await outputBypassedAssetSummary({
-      ctx,
-      args,
-      promptText,
-      summaryText: textContent?.content ?? "",
-      assetFooterParts,
-      footerLabel: "short content",
-    });
-    return;
+    return {
+      kind: "summary",
+      outcome: "short-content",
+      summary: (textContent?.content ?? "").trimEnd(),
+      summaryEmitted: false,
+      summaryFromCache: false,
+      prompt: promptText,
+      extracted: buildAssetExtracted(args),
+      footerParts: assetFooterParts,
+      llm: null,
+    };
   }
 
   if (
@@ -252,13 +268,17 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
     textContent &&
     countTokens(textContent.content) <= ctx.maxOutputTokensArg
   ) {
-    ctx.clearProgressForStdout();
-    ctx.stdout.write(`${textContent.content.trim()}\n`);
-    ctx.restoreProgressAfterStdout?.();
-    if (assetFooterParts.length > 0) {
-      ctx.writeViaFooter([...assetFooterParts, "no model"]);
-    }
-    return;
+    return {
+      kind: "summary",
+      outcome: "token-fit",
+      summary: textContent.content.trim(),
+      summaryEmitted: false,
+      summaryFromCache: false,
+      prompt: promptText,
+      extracted: buildAssetExtracted(args),
+      footerParts: assetFooterParts,
+      llm: null,
+    };
   }
 
   const attempts: ModelAttempt[] = await buildAssetModelAttempts({
@@ -310,6 +330,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
     verbose: (message) =>
       writeVerbose(ctx.stderr, ctx.verbose, message, ctx.verboseColor, ctx.envForRun),
     onModelChosen: args.onModelChosen,
+    onCacheResolved: ctx.onSummaryCached ?? null,
     buildCachedResult: (attempt, summary) => ({
       summary,
       summaryEmitted: false,
@@ -342,13 +363,17 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
 
   if (!execution.result || !execution.usedAttempt) {
     if (textContent) {
-      ctx.clearProgressForStdout();
-      ctx.stdout.write(`${textContent.content.trim()}\n`);
-      ctx.restoreProgressAfterStdout?.();
-      if (assetFooterParts.length > 0) {
-        ctx.writeViaFooter([...assetFooterParts, "no model"]);
-      }
-      return;
+      return {
+        kind: "summary",
+        outcome: "attempts-exhausted",
+        summary: textContent.content.trim(),
+        summaryEmitted: false,
+        summaryFromCache: false,
+        prompt: promptText,
+        extracted: buildAssetExtracted(args),
+        footerParts: assetFooterParts,
+        llm: null,
+      };
     }
     if (execution.failure.lastError instanceof Error) throw execution.failure.lastError;
     throw new Error("No model available for this input");
@@ -358,125 +383,26 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
   const usedAttempt = execution.usedAttempt;
   const summaryFromCache = execution.summaryFromCache;
 
-  const extracted = {
-    kind: "asset" as const,
-    source: args.sourceLabel,
-    mediaType: args.attachment.mediaType,
-    filename: args.attachment.filename,
-  };
-
-  if (ctx.json) {
-    ctx.clearProgressForStdout();
-    const finishReport = ctx.shouldComputeReport ? await ctx.buildReport() : null;
-    const input: {
-      kind: "file" | "asset-url";
-      filePath?: string;
-      url?: string;
-      timeoutMs: number;
-      length: { kind: "preset"; preset: string } | { kind: "chars"; maxCharacters: number };
-      maxOutputTokens: number | null;
-      model: string;
-      language: ReturnType<typeof formatOutputLanguageForJson>;
-    } =
-      args.sourceKind === "file"
-        ? {
-            kind: "file",
-            filePath: args.sourceLabel,
-            timeoutMs: ctx.timeoutMs,
-            length:
-              ctx.lengthArg.kind === "preset"
-                ? { kind: "preset", preset: ctx.lengthArg.preset }
-                : { kind: "chars", maxCharacters: ctx.lengthArg.maxCharacters },
-            maxOutputTokens: ctx.maxOutputTokensArg,
-            model: ctx.requestedModelLabel,
-            language: formatOutputLanguageForJson(ctx.outputLanguage),
-          }
-        : {
-            kind: "asset-url",
-            url: args.sourceLabel,
-            timeoutMs: ctx.timeoutMs,
-            length:
-              ctx.lengthArg.kind === "preset"
-                ? { kind: "preset", preset: ctx.lengthArg.preset }
-                : { kind: "chars", maxCharacters: ctx.lengthArg.maxCharacters },
-            maxOutputTokens: ctx.maxOutputTokensArg,
-            model: ctx.requestedModelLabel,
-            language: formatOutputLanguageForJson(ctx.outputLanguage),
-          };
-    const payload = {
-      input,
-      env: buildRunJsonEnv(ctx.apiStatus),
-      extracted,
-      prompt: promptText,
-      llm: {
-        provider: modelMeta.provider,
-        model: usedAttempt.userModelId,
-        maxCompletionTokens: maxOutputTokensForCall,
-        strategy: "single" as const,
-      },
-      metrics: ctx.metricsEnabled ? finishReport : null,
-      summary,
-    };
-    ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    ctx.restoreProgressAfterStdout?.();
-    if (ctx.metricsEnabled && finishReport) {
-      const costUsd = await ctx.estimateCostUsd();
-      writeFinishLine({
-        stderr: ctx.stderr,
-        env: ctx.envForRun,
-        elapsedMs: Date.now() - ctx.runStartedAtMs,
-        elapsedLabel: summaryFromCache ? "Cached" : null,
-        model: usedAttempt.userModelId,
-        report: finishReport,
-        costUsd,
-        detailed: ctx.metricsDetailed,
-        extraParts: null,
-        color: ctx.verboseColor,
-      });
-    }
-    return;
-  }
-
-  if (!summaryEmitted) {
-    ctx.clearProgressForStdout();
-    const rendered =
-      !ctx.plain && isRichTty(ctx.stdout)
-        ? renderMarkdownAnsi(prepareMarkdownForTerminal(summary), {
-            width: markdownRenderWidth(ctx.stdout, ctx.env),
-            wrap: true,
-            color: supportsColor(ctx.stdout, ctx.envForRun),
-            hyperlinks: true,
-          })
-        : summary;
-
-    if (!ctx.plain && isRichTty(ctx.stdout)) {
-      ctx.stdout.write(`\n${rendered.replace(/^\n+/, "")}`);
-    } else {
-      if (isRichTty(ctx.stdout)) ctx.stdout.write("\n");
-      ctx.stdout.write(rendered.replace(/^\n+/, ""));
-    }
-    if (!rendered.endsWith("\n")) {
-      ctx.stdout.write("\n");
-    }
-    ctx.restoreProgressAfterStdout?.();
-  }
-
-  ctx.writeViaFooter([...assetFooterParts, `model ${usedAttempt.userModelId}`]);
-
-  const report = ctx.shouldComputeReport ? await ctx.buildReport() : null;
-  if (ctx.metricsEnabled && report) {
-    const costUsd = await ctx.estimateCostUsd();
-    writeFinishLine({
-      stderr: ctx.stderr,
-      env: ctx.envForRun,
-      elapsedMs: Date.now() - ctx.runStartedAtMs,
-      elapsedLabel: summaryFromCache ? "Cached" : null,
+  return {
+    kind: "summary",
+    outcome: "model",
+    summary,
+    summaryEmitted,
+    summaryFromCache,
+    prompt: promptText,
+    extracted: buildAssetExtracted(args),
+    footerParts: assetFooterParts,
+    llm: {
+      provider: modelMeta.provider,
       model: usedAttempt.userModelId,
-      report,
-      costUsd,
-      detailed: ctx.metricsDetailed,
-      extraParts: null,
-      color: ctx.verboseColor,
-    });
-  }
+      maxCompletionTokens: maxOutputTokensForCall,
+      strategy: "single",
+    },
+  };
+}
+
+export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAssetArgs) {
+  const result = await executeAssetSummary(ctx, args);
+  await presentAssetSummary(ctx, args, result);
+  return result;
 }
