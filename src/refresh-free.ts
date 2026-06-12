@@ -1,7 +1,3 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import JSON5 from "json5";
 import type { LlmApiKeys } from "./llm/generate-text.js";
 import { generateTextWithModelId } from "./llm/generate-text.js";
 import {
@@ -9,6 +5,7 @@ import {
   parseOpenRouterCatalog,
   rankOpenRouterModelsForBenchmark,
 } from "./refresh-free/catalog.js";
+import { writeFreeModelConfig } from "./refresh-free/config.js";
 
 type GenerateFreeOptions = {
   runs: number;
@@ -64,77 +61,6 @@ function classifyOpenRouterRateLimit(message: string): RateLimitKind | null {
   }
   // Default: assume per-minute (most common for free models).
   return "perMin";
-}
-
-function assertNoComments(raw: string, path: string): void {
-  let inString: '"' | "'" | null = null;
-  let escaped = false;
-  let line = 1;
-  let col = 1;
-
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i] ?? "";
-    const next = raw[i + 1] ?? "";
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        col += 1;
-        continue;
-      }
-      if (ch === "\\") {
-        escaped = true;
-        col += 1;
-        continue;
-      }
-      if (ch === inString) {
-        inString = null;
-      }
-      if (ch === "\n") {
-        line += 1;
-        col = 1;
-      } else {
-        col += 1;
-      }
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      inString = ch as '"' | "'";
-      escaped = false;
-      col += 1;
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      throw new Error(
-        `Invalid config file ${path}: comments are not allowed (found // at ${line}:${col}).`,
-      );
-    }
-
-    if (ch === "/" && next === "*") {
-      throw new Error(
-        `Invalid config file ${path}: comments are not allowed (found /* at ${line}:${col}).`,
-      );
-    }
-
-    if (ch === "\n") {
-      line += 1;
-      col = 1;
-    } else {
-      col += 1;
-    }
-  }
-}
-
-function resolveConfigPath(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || homedir();
-  if (!home) throw new Error("Missing HOME");
-  return join(home, ".summarize", "config.json");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -601,45 +527,11 @@ export async function refreshFree({
       : refined.slice(0, MAX_CANDIDATES).map((r) => `openrouter/${r.openrouterModelId}`);
   stderr.write(`${cmdName}: selected ${selected.length} candidates.\n`);
 
-  const configPath = resolveConfigPath(env);
-  let root: Record<string, unknown> = {};
-  try {
-    const raw = await readFile(configPath, "utf8");
-    assertNoComments(raw, configPath);
-    const parsed = JSON5.parse(raw) as unknown;
-    if (!isRecord(parsed)) {
-      throw new Error(`Invalid config file ${configPath}: expected an object at the top level`);
-    }
-    root = parsed;
-  } catch (error) {
-    const code = (error as { code?: unknown } | null)?.code;
-    if (code !== "ENOENT") throw error;
-  }
-
-  const configModelsRaw = root.models;
-  const configModels = (() => {
-    if (typeof configModelsRaw === "undefined") return {};
-    if (!isRecord(configModelsRaw)) {
-      throw new Error(`Invalid config file ${configPath}: "models" must be an object.`);
-    }
-    return { ...configModelsRaw };
-  })();
-
-  configModels.free = { rules: [{ candidates: selected }] };
-  root.models = configModels;
-  if (resolved.setDefault) {
-    root.model = "free";
-  }
-
-  const configDir = dirname(configPath);
-  await mkdir(configDir, { recursive: true, mode: 0o700 });
-  await chmod(configDir, 0o700).catch(() => {});
-  const next = `${JSON.stringify(root, null, 2)}\n`;
-  const tmp = `${configPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, next, { encoding: "utf8", mode: 0o600 });
-  await rename(tmp, configPath);
-  await chmod(configPath, 0o600).catch(() => {});
-
+  const configPath = await writeFreeModelConfig({
+    env,
+    candidates: selected,
+    setDefault: resolved.setDefault,
+  });
   stdout.write(`Wrote ${configPath} (models.free)\n`);
 
   const refinedById = new Map(refined.map((m) => [m.openrouterModelId, m] as const));
