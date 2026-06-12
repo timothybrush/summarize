@@ -36,7 +36,7 @@ import { createSidepanelInteractionRuntime } from "./interaction-runtime";
 import { createMetricsController } from "./metrics-controller";
 import { createNavigationRuntime } from "./navigation-runtime";
 import { createPanelCacheController, type PanelCachePayload } from "./panel-cache";
-import { createPanelPortRuntime } from "./panel-port";
+import { createPanelMessagingRuntime } from "./panel-messaging";
 import { createPanelStateStore } from "./panel-state-store";
 import {
   normalizePanelUrl,
@@ -183,48 +183,14 @@ const nextSlidesContextRequestId = () => {
   return panelState.slidesSession.slidesContextRequestId;
 };
 
-const panelPortRuntime = createPanelPortRuntime<BgToPanel>({
+const panelMessagingRuntime = createPanelMessagingRuntime({
+  panelState,
+  dispatchPanelState: panelStateStore.dispatch,
   onMessage: (msg) => {
     handleBgMessage(msg);
   },
 });
-
-async function send(message: PanelToBg) {
-  if (message.type === "panel:summarize") {
-    updatePanelSession({ lastAction: "summarize" });
-  } else if (message.type === "panel:agent") {
-    updatePanelSession({ lastAction: "chat" });
-  }
-  await panelPortRuntime.send(message);
-}
-
-const pendingLocalSlidesRequests = new Map<
-  string,
-  {
-    resolve: (slides: SseSlidesData | null) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }
->();
-
-async function resolveLocalSlides(runId: string): Promise<SseSlidesData | null> {
-  const requestId = `local-slides-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return await new Promise<SseSlidesData | null>((resolve) => {
-    const timer = window.setTimeout(() => {
-      pendingLocalSlidesRequests.delete(requestId);
-      resolve(null);
-    }, 2500);
-    pendingLocalSlidesRequests.set(requestId, { resolve, timer });
-    void send({ type: "panel:slides-local", requestId, runId });
-  });
-}
-
-function handleLocalSlidesResponse(message: Extract<BgToPanel, { type: "slides:local" }>) {
-  const pending = pendingLocalSlidesRequests.get(message.requestId);
-  if (!pending) return;
-  window.clearTimeout(pending.timer);
-  pendingLocalSlidesRequests.delete(message.requestId);
-  pending.resolve(message.ok ? (message.slides ?? null) : null);
-}
+const { handleLocalSlidesResponse, resolveLocalSlides, send, sendRaw } = panelMessagingRuntime;
 
 let autoKickTimer = 0;
 
@@ -1499,7 +1465,7 @@ function scheduleAutoKick() {
 }
 
 const interactionRuntime = createSidepanelInteractionRuntime({
-  sendRawMessage: (message) => panelPortRuntime.send(message as PanelToBg),
+  sendRawMessage: (message) => sendRaw(message as PanelToBg),
   setLastAction: (value) => {
     updatePanelSession({ lastAction: value });
   },
@@ -1795,7 +1761,7 @@ bindSidepanelUiEvents({
 });
 
 bootstrapSidepanel({
-  ensurePanelPort: () => panelPortRuntime.ensure(),
+  ensurePanelPort: () => panelMessagingRuntime.ensure(),
   loadSettings,
   panelState,
   dispatchPanelState: panelStateStore.dispatch,
