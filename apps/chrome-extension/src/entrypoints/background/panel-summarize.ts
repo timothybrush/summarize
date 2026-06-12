@@ -5,9 +5,10 @@ import type { BrowserLocalMediaTranscript } from "./browser-local-transcript";
 import { buildBrowserSummaryMarkdown } from "./browser-summary";
 import { createCachedExtract, type CachedExtract } from "./cached-extract";
 import type { ExtractResponse } from "./content-script-bridge";
-import { routeExtract, type ExtractorContext, type ExtractorResult } from "./extractors/router";
+import type { ExtractorContext } from "./extractors/router";
+import { ensurePreparedPanelTranscript, preparePanelContent } from "./panel-content-preparation";
 import type { BrowserYoutubeLocalTranscript } from "./youtube-local-transcript";
-import { extractYouTubeTranscriptInTab, hasYouTubeCaptionTracksInTab } from "./youtube-transcript";
+import { extractYouTubeTranscriptInTab } from "./youtube-transcript";
 
 type DaemonRecoveryLike = {
   recordFailure: (url: string) => void;
@@ -205,262 +206,51 @@ export async function summarizeActiveTab({
     session.inflightRequest = null;
   };
 
-  const prefersUrlMode = Boolean(tab.url && shouldPreferUrlMode(tab.url));
-  const wantsUrlDirectPath =
-    Boolean(tab.url && isYouTubeVideoUrl(tab.url)) && opts?.inputMode !== "page" && prefersUrlMode;
-
-  let extracted: ExtractResponse & { ok: true };
-  let routedResult: Pick<ExtractorResult, "source" | "diagnostics"> | null = null;
-  let browserTranscriptTimedText: string | null = null;
-  if (wantsUrlDirectPath) {
-    logPanel("extractor.route.start", { tabId: tab.id, preferUrl: prefersUrlMode });
-    logPanel("extractor.route.preferUrlHardSwitch", { tabId: tab.id });
-    sendStatus(`Preparing video… (${reason})`);
-    logPanel("extract:url-direct", { reason, tabId: tab.id });
-    const shouldProbeBrowserTranscript =
-      !useBrowserSummary || (await hasYouTubeCaptionTracksInTab(tab.id));
-    const browserTranscript = shouldProbeBrowserTranscript
-      ? await withTimeout(
-          extractYouTubeTranscript(tab.id, settings.maxChars),
-          youtubeTranscriptTimeoutMs,
-          { ok: false as const, error: "YouTube caption lookup timed out." },
-        )
-      : { ok: false as const, error: "YouTube player has no caption tracks." };
-    if (browserTranscript.ok && !urlsMatch(browserTranscript.url, tabUrl)) {
-      logPanel("extract:url-direct:browser-transcript-stale", {
-        expectedUrl: tabUrl,
-        actualUrl: browserTranscript.url,
-      });
-      clearCurrentRun();
-      sendStatus("");
-      return;
-    }
-    browserTranscriptTimedText = browserTranscript.ok
-      ? browserTranscript.transcriptTimedText
-      : null;
-    if (isSuperseded()) return;
-    const extractedAttempt =
-      browserTranscript.ok && browserTranscript.text.trim().length > 0
-        ? null
-        : await extractFromTab(tab.id, settings.maxChars, {
-            timeoutMs: 8_000,
-            inputMode: "video",
-            log: (event, detail) => {
-              logPanel(event, detail);
-            },
-          });
-    if (isSuperseded()) return;
-    extracted =
-      browserTranscript.ok && browserTranscript.text.trim().length > 0
-        ? {
-            ok: true,
-            url: browserTranscript.url,
-            title: tab.title ?? null,
-            text: browserTranscript.text,
-            truncated: browserTranscript.truncated,
-            mediaDurationSeconds: browserTranscript.durationSeconds,
-            media: { hasVideo: true, hasAudio: true, hasCaptions: true },
-          }
-        : extractedAttempt?.ok && extractedAttempt.data.text.trim().length > 0
-          ? {
-              ...extractedAttempt.data,
-              media: extractedAttempt.data.media ?? {
-                hasVideo: true,
-                hasAudio: true,
-                hasCaptions: true,
-              },
-            }
-          : {
-              ok: true,
-              url: tab.url,
-              title: tab.title ?? null,
-              text: "",
-              truncated: false,
-              media: { hasVideo: true, hasAudio: true, hasCaptions: true },
-            };
-    logPanel("extract:url-direct:browser-transcript", {
-      ok: browserTranscript.ok,
-      textLength: extracted.text.length,
-      source:
-        browserTranscript.ok && browserTranscript.text.trim().length > 0
-          ? "browser"
-          : extracted.text.length > 0
-            ? "content-script"
-            : "empty-fallback",
-      error: browserTranscript.ok ? undefined : browserTranscript.error,
-    });
-  } else {
-    sendStatus(`Extracting… (${reason})`);
-    logPanel("extract:start", { reason, tabId: tab.id, maxChars: settings.maxChars });
-    const statusFromExtractEvent = (event: string) => {
-      if (!panelSessionStore.isPanelOpen(session)) return;
-      if (event === "extract:attempt") {
-        sendStatus(`Extracting page content… (${reason})`);
-        return;
-      }
-      if (event === "extract:inject:ok") {
-        sendStatus(`Extracting: injecting… (${reason})`);
-        return;
-      }
-      if (event === "extract:message:ok") {
-        sendStatus(`Extracting: reading… (${reason})`);
-      }
-    };
-    if (prefersUrlMode) {
-      logPanel("extractor.route.start", { tabId: tab.id, preferUrl: true });
-      logPanel("extractor.route.preferUrlHardSwitch", { tabId: tab.id });
-      const extractedAttempt = await extractFromTab(tab.id, settings.maxChars, {
-        timeoutMs: 8_000,
-        inputMode: requestedInputMode ?? "video",
-        log: (event, detail) => {
-          statusFromExtractEvent(event);
-          logPanel(event, detail);
-        },
-      });
-      if (isSuperseded()) return;
-      logPanel(extractedAttempt.ok ? "extract:done" : "extract:failed", {
-        ok: extractedAttempt.ok,
-        ...(extractedAttempt.ok
-          ? { url: extractedAttempt.data.url }
-          : { error: extractedAttempt.error }),
-      });
-      extracted = extractedAttempt.ok
-        ? extractedAttempt.data
-        : {
-            ok: true,
-            url: tab.url,
-            title: tab.title ?? null,
-            text: "",
-            truncated: false,
-            media: null,
-          };
-    } else {
-      const routed = await routeExtract({
-        tabId: tab.id,
-        url: tab.url,
-        title: tab.title?.trim() ?? null,
-        maxChars: settings.maxChars,
-        minTextChars: 1,
-        token: settings.token,
-        noCache: Boolean(opts?.refresh),
-        includeDiagnostics: settings.extendedLogging,
-        signal: controller.signal,
-        fetchImpl,
-        extractFromTab,
-        log: (event, detail) => {
-          statusFromExtractEvent(event);
-          logPanel(event, detail);
-        },
-      });
-      if (isSuperseded()) return;
-      logPanel(routed ? "extract:done" : "extract:failed", {
-        ok: Boolean(routed),
-        ...(routed
-          ? { url: routed.extracted.url, source: routed.source }
-          : { error: "No extractor result" }),
-      });
-      if (routed) {
-        extracted = routed.extracted;
-        routedResult = routed;
-      } else {
-        extracted = {
-          ok: true,
-          url: tab.url,
-          title: tab.title ?? null,
-          text: "",
-          truncated: false,
-          media: null,
-        };
-      }
-    }
+  const prepared = await preparePanelContent({
+    tab: { id: tab.id, url: tabUrl, title: tab.title },
+    tabUrl,
+    settings,
+    reason,
+    refresh: Boolean(opts?.refresh),
+    requestedInputMode,
+    useBrowserSummary,
+    panelOpen: () => panelSessionStore.isPanelOpen(session),
+    isSuperseded,
+    signal: controller.signal,
+    fetchImpl,
+    extractFromTab,
+    sendStatus,
+    logPanel,
+    urlsMatch,
+    extractYouTubeTranscript,
+    youtubeTranscriptTimeoutMs,
+  });
+  if (prepared.kind === "stale") {
+    clearCurrentRun();
+    sendStatus("");
+    return;
   }
+  if (prepared.kind === "superseded" || isSuperseded()) return;
 
-  if (tab.url && extracted.url && !urlsMatch(tab.url, extracted.url)) {
-    await new Promise((resolve) => setTimeout(resolve, 180));
-    logPanel("extract:retry", { tabId: tab.id, maxChars: settings.maxChars });
-    const retry = await extractFromTab(tab.id, settings.maxChars, {
-      timeoutMs: 8_000,
-      inputMode: requestedInputMode ?? undefined,
-      log: (event, detail) => logPanel(event, detail),
-    });
-    if (isSuperseded()) return;
-    if (retry.ok) {
-      extracted = retry.data;
-      routedResult = null;
-    }
-  }
-
-  const extractedMatchesTab = tab.url && extracted.url ? urlsMatch(tab.url, extracted.url) : true;
-  const resolvedExtracted =
-    tab.url && !extractedMatchesTab
-      ? {
-          ok: true,
-          url: tab.url,
-          title: tab.title ?? null,
-          text: "",
-          truncated: false,
-          media: null,
-        }
-      : extracted;
-
-  if (isSuperseded()) return;
-  const resolvedTitle = tab.title?.trim() || resolvedExtracted.title || null;
-  let resolvedPayload = { ...resolvedExtracted, title: resolvedTitle };
+  let preparedContent = prepared.content;
+  let resolvedPayload = preparedContent.payload;
+  const resolvedTitle = preparedContent.title;
+  let browserTranscriptTimedText = preparedContent.transcriptTimedText;
   const ensureLocalBrowserTranscript = async () => {
-    if (!tab.id || browserTranscriptTimedText?.trim()) {
-      return false;
-    }
-    const isYoutube = isYouTubeVideoUrl(resolvedPayload.url);
-    if (!isYoutube && requestedInputMode !== "video" && !prefersUrlMode) return false;
-    const localTranscript = isYoutube
-      ? await transcribeYouTubeLocally({
-          tabId: tab.id,
-          maxChars: settings.maxChars,
-          onStatus: sendStatus,
-        })
-      : await transcribeMediaLocally({
-          tabId: tab.id,
-          tabUrl,
-          maxChars: settings.maxChars,
-          onStatus: sendStatus,
-        });
-    if (!localTranscript.ok) {
-      logPanel(
-        isYoutube
-          ? "extract:url-direct:local-transcript-failed"
-          : "extract:browser-media:local-transcript-failed",
-        {
-          error: localTranscript.error,
-        },
-      );
-      return false;
-    }
-    if (!urlsMatch(localTranscript.url, tabUrl)) return false;
-    browserTranscriptTimedText = localTranscript.transcriptTimedText;
-    resolvedPayload = {
-      ...resolvedPayload,
-      text: localTranscript.text,
-      truncated: localTranscript.truncated,
-      mediaDurationSeconds: localTranscript.durationSeconds,
-      media: { hasVideo: true, hasAudio: true, hasCaptions: false },
-    };
-    logPanel(
-      isYoutube ? "extract:url-direct:local-transcript" : "extract:browser-media:transcript",
-      {
-        textLength: localTranscript.text.length,
-        mediaSource:
-          "mediaSource" in localTranscript ? localTranscript.mediaSource : localTranscript.source,
-        decoder: localTranscript.diagnostics.decoder,
-        mediaChunksProcessed: localTranscript.diagnostics.chunksProcessed,
-        mediaChunksTotal: localTranscript.diagnostics.chunksTotal,
-        mediaCodec: localTranscript.diagnostics.codec,
-        mediaInput: localTranscript.diagnostics.input,
-        whisperDevice: localTranscript.diagnostics.whisper.device,
-        whisperLoadMs: Math.round(localTranscript.diagnostics.whisper.loadMs),
-        whisperReused: localTranscript.diagnostics.whisper.reused,
-      },
-    );
-    return true;
+    preparedContent = await ensurePreparedPanelTranscript({
+      content: preparedContent,
+      tab: { id: tab.id, url: tabUrl, title: tab.title },
+      tabUrl,
+      settings,
+      requestedInputMode,
+      sendStatus,
+      logPanel,
+      urlsMatch,
+      transcribeYouTubeLocally,
+      transcribeMediaLocally,
+    });
+    resolvedPayload = preparedContent.payload;
+    browserTranscriptTimedText = preparedContent.transcriptTimedText;
   };
   if (useBrowserSummary) {
     await ensureLocalBrowserTranscript();
@@ -505,8 +295,8 @@ export async function summarizeActiveTab({
       tab.id,
       createCachedExtract({
         extracted: resolvedPayload,
-        source: routedResult?.source,
-        diagnostics: routedResult?.diagnostics,
+        source: preparedContent.source,
+        diagnostics: preparedContent.diagnostics,
         title: resolvedTitle,
         transcript: browserTranscriptTimedText
           ? {
@@ -648,18 +438,4 @@ export async function summarizeActiveTab({
   };
   session.inflightRequest = null;
   send({ type: "run:start", run });
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(fallback), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
