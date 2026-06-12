@@ -3,13 +3,11 @@ import { promises as fs } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { type SseEvent } from "@steipete/summarize-core/runtime";
-import type { CacheState } from "../cache.js";
 import { loadSummarizeConfig } from "../config.js";
 import { createDaemonLogger } from "../logging/daemon.js";
 import { setProcessObserver } from "../processes.js";
 import { refreshFree } from "../refresh-free.js";
-import { createCacheStateFromConfig, refreshCacheStoreIfMissing } from "../run/cache-state.js";
+import { createCacheStateFromConfig } from "../run/cache-state.js";
 import { resolveExecutableInPath } from "../run/env.js";
 import { createMediaCacheFromConfig } from "../run/media-cache-state.js";
 import { resolvePackageVersion } from "../version.js";
@@ -21,32 +19,10 @@ import { ProcessRegistry } from "./process-registry.js";
 import { handleAdminRoutes } from "./server-admin-routes.js";
 import { handleAgentRoute } from "./server-agent-route.js";
 import { corsHeaders, json, readBearerToken, readCorsHeaders, text } from "./server-http.js";
-import {
-  buildActiveSummarizeKey,
-  DaemonRuntime,
-  resolveDaemonMaxActiveSummaries,
-} from "./server-runtime.js";
+import { DaemonRuntime, resolveDaemonMaxActiveSummaries } from "./server-runtime.js";
 import { handleSessionRoutes } from "./server-session-routes.js";
-import {
-  createSession,
-  emitMeta,
-  emitSlides,
-  emitSlidesDone,
-  emitSlidesStatus,
-  endSession,
-  pushSlidesToSession,
-  pushToSession,
-  scheduleSessionCleanup,
-  type Session,
-  type SessionEvent,
-} from "./server-session.js";
-import {
-  executeSummarizeSession,
-  handleExtractOnlySummarizeRequest,
-  toExtractOnlySlidesPayload,
-} from "./server-summarize-execution.js";
-import { parseSummarizeRequest } from "./server-summarize-request.js";
-import { assertDaemonUrlFetchAllowed, createDaemonUrlFetchGuard } from "./url-fetch-guard.js";
+import { createSession, endSession, pushToSession, type SessionEvent } from "./server-session.js";
+import { handleSummarizeRoute } from "./server-summarize-route.js";
 import { isWindowsContainerEnvironment } from "./windows-container.js";
 
 export { corsHeaders, isTrustedOrigin } from "./server-http.js";
@@ -139,7 +115,7 @@ export async function runDaemonServer({
   const runtime = new DaemonRuntime({
     maxActiveSummaries: resolveDaemonMaxActiveSummaries(env),
   });
-  const { sessions, refreshSessions, maxActiveSummaries } = runtime;
+  const { sessions, refreshSessions } = runtime;
   const authLimiter = new AuthRateLimiter();
 
   const server = http.createServer((req, res) => {
@@ -250,214 +226,25 @@ export async function runDaemonServer({
         return;
       }
 
-      if (req.method === "POST" && pathname === "/v1/summarize") {
-        const request = await parseSummarizeRequest({
+      if (
+        await handleSummarizeRoute({
           req,
           res,
+          pathname,
           cors,
           env,
+          fetchImpl,
+          cacheState,
+          mediaCache,
+          runtime,
+          port,
+          daemonLogger,
           resolveToolPath,
-        });
-        if (!request) {
-          return;
-        }
-        const urlFetchNeeded = request.extractOnly || request.mode === "url" || !request.hasText;
-        let summarizeUrlFetchImpl: typeof fetch | null = null;
-        if (urlFetchNeeded) {
-          try {
-            await assertDaemonUrlFetchAllowed(request.pageUrl);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            json(res, 400, { ok: false, error: message }, cors);
-            return;
-          }
-          summarizeUrlFetchImpl = createDaemonUrlFetchGuard(fetchImpl);
-        }
-        const {
-          pageUrl,
-          title,
-          textContent,
-          truncated,
-          modelOverride,
-          lengthRaw,
-          languageRaw,
-          promptOverride,
-          noCache,
-          extractOnly,
-          mode,
-          maxCharacters,
-          format,
-          overrides,
-          slidesSettings,
-          diagnostics,
-          hasText,
-        } = request;
-        const includeContentLog = daemonLogger.enabled && diagnostics.includeContent;
-        const activeRequestKey = extractOnly ? null : buildActiveSummarizeKey(request);
-        if (activeRequestKey) {
-          const activeSession = runtime.findActiveSummarizeSession(activeRequestKey);
-          if (activeSession) {
-            json(res, 200, { ok: true, id: activeSession.id, coalesced: true }, cors);
-            return;
-          }
-        }
-        const releaseSummarizeSlot = runtime.reserveSummarizeSlot();
-        if (!releaseSummarizeSlot) {
-          json(
-            res,
-            429,
-            { ok: false, error: `too many active summarize requests (max ${maxActiveSummaries})` },
-            cors,
-          );
-          return;
-        }
-        let session: Session | null = null;
-        try {
-          if (!extractOnly) {
-            session = createSession(() => randomUUID());
-            session.slidesRequested = Boolean(slidesSettings);
-            sessions.set(session.id, session);
-            if (activeRequestKey) {
-              runtime.registerActiveSummarizeRequest(activeRequestKey, session.id);
-            }
-          }
-
-          await refreshCacheStoreIfMissing({ cacheState, transcriptNamespace: "yt:auto" });
-          if (extractOnly) {
-            const extractTask = (async () => {
-              try {
-                const { extracted, slides } = await handleExtractOnlySummarizeRequest({
-                  request,
-                  env,
-                  fetchImpl,
-                  urlFetchImpl: summarizeUrlFetchImpl,
-                  cacheState,
-                  mediaCache,
-                });
-                const slidesPayload = toExtractOnlySlidesPayload(slides);
-                json(
-                  res,
-                  200,
-                  {
-                    ok: true,
-                    extracted: {
-                      content: extracted.content,
-                      title: extracted.title,
-                      url: extracted.url,
-                      wordCount: extracted.wordCount,
-                      totalCharacters: extracted.totalCharacters,
-                      truncated: extracted.truncated,
-                      transcriptSource: extracted.transcriptSource ?? null,
-                      transcriptCharacters: extracted.transcriptCharacters ?? null,
-                      transcriptWordCount: extracted.transcriptWordCount ?? null,
-                      transcriptLines: extracted.transcriptLines ?? null,
-                      transcriptSegments: extracted.transcriptSegments ?? null,
-                      transcriptTimedText: extracted.transcriptTimedText ?? null,
-                      transcriptionProvider: extracted.transcriptionProvider ?? null,
-                      mediaDurationSeconds: extracted.mediaDurationSeconds ?? null,
-                      diagnostics: extracted.diagnostics,
-                    },
-                    ...(slidesPayload ? { slides: slidesPayload } : {}),
-                  },
-                  cors,
-                );
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                json(res, 500, { ok: false, error: message }, cors);
-              }
-            })();
-            runtime.trackSummarizeTask(extractTask, releaseSummarizeSlot);
-            await extractTask;
-            return;
-          }
-
-          if (!session) {
-            throw new Error("Failed to initialize summarize session.");
-          }
-          const activeSession = session;
-          const requestLogger = daemonLogger.getSubLogger("daemon.summarize", {
-            requestId: activeSession.id,
-          });
-          const logStartedAt = Date.now();
-          let logSummaryFromCache = false;
-          let logInputSummary: string | null = null;
-          let logSummaryText = "";
-          let logExtracted: Record<string, unknown> | null = null;
-          const logInput = includeContentLog
-            ? {
-                url: pageUrl,
-                title,
-                text: hasText ? textContent : null,
-                truncated: hasText ? truncated : null,
-              }
-            : null;
-          const logSlidesSettings =
-            includeContentLog && slidesSettings
-              ? {
-                  enabled: slidesSettings.enabled,
-                  ocr: slidesSettings.ocr,
-                  outputDir: slidesSettings.outputDir,
-                  sceneThreshold: slidesSettings.sceneThreshold,
-                  autoTuneThreshold: slidesSettings.autoTuneThreshold,
-                  maxSlides: slidesSettings.maxSlides,
-                  minDurationSeconds: slidesSettings.minDurationSeconds,
-                }
-              : null;
-          requestLogger?.info({
-            event: "summarize.request",
-            url: pageUrl,
-            mode,
-            hasText,
-            noCache,
-            length: lengthRaw,
-            language: languageRaw,
-            model: modelOverride,
-            includeContent: includeContentLog,
-            slides: Boolean(slidesSettings),
-            ...(logSlidesSettings ? { slidesSettings: logSlidesSettings } : {}),
-            ...(includeContentLog ? { diagnostics } : {}),
-          });
-
-          json(res, 200, { ok: true, id: activeSession.id }, cors);
-
-          const summaryTask = executeSummarizeSession({
-            session: activeSession,
-            request,
-            env,
-            fetchImpl,
-            urlFetchImpl: summarizeUrlFetchImpl,
-            cacheState,
-            mediaCache,
-            port,
-            onSessionEvent,
-            requestLogger,
-            includeContentLog,
-            logStartedAt,
-            logInput,
-            logSlidesSettings,
-            sessions,
-            refreshSessions,
-          });
-          if (activeRequestKey) {
-            void summaryTask.finally(() => {
-              runtime.clearActiveSummarizeRequest(activeRequestKey, activeSession.id);
-            });
-          }
-          runtime.trackSummarizeTask(summaryTask, releaseSummarizeSlot);
-          return;
-        } catch (error) {
-          if (activeRequestKey && session) {
-            runtime.clearActiveSummarizeRequest(activeRequestKey, session.id);
-            const message = error instanceof Error ? error.message : String(error);
-            pushToSession(session, { event: "error", data: { message } }, onSessionEvent);
-            if (session.slidesRequested) {
-              emitSlidesDone(session, { ok: false, error: message }, onSessionEvent);
-            }
-            scheduleSessionCleanup({ sessions, refreshSessions, session });
-          }
-          releaseSummarizeSlot();
-          throw error;
-        }
+          createSessionId: randomUUID,
+          onSessionEvent,
+        })
+      ) {
+        return;
       }
 
       if (await handleAgentRoute({ req, res, url, cors, env, createRunId: randomUUID })) {
