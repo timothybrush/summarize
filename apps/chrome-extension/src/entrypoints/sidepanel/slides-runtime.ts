@@ -1,22 +1,19 @@
+import type { PanelStateAction } from "./panel-state-store";
 import { createSlidesHydrator } from "./slides-hydrator";
 import { createSlidesRunRuntime } from "./slides-run-runtime";
 import { createSlidesSummaryController } from "./slides-summary-controller";
+import type { PanelState } from "./types";
 
 export function createSidepanelSlidesRuntime({
   applySlidesPayload,
   clearSummarySource,
+  panelState,
+  dispatchPanelState,
   friendlyFetchError,
-  getActiveTabUrl,
-  getInputMode,
-  getInputModeOverride,
   getLengthValue,
-  getPanelPhase,
-  getPanelState,
-  getSlidesEnabled,
   getToken,
   resolveLocalSlides,
   getTranscriptTimedText,
-  getUiState,
   headerSetStatus,
   hideSlideNotice,
   isStreaming,
@@ -25,13 +22,8 @@ export function createSidepanelSlidesRuntime({
   renderInlineSlidesFallback,
   renderMarkdown,
   schedulePanelCacheSync,
-  setInputMode,
-  setInputModeOverride,
   setSlidesBusy,
-  setSlidesRunId,
   showSlideNotice,
-  stopSlidesStream,
-  stopSlidesSummaryStream,
   updateSlideSummaryFromMarkdown,
 }: {
   applySlidesPayload: (
@@ -40,14 +32,10 @@ export function createSidepanelSlidesRuntime({
       : never,
   ) => void;
   clearSummarySource: () => void;
+  panelState: PanelState;
+  dispatchPanelState?: (action: PanelStateAction) => void;
   friendlyFetchError: (error: unknown, fallback: string) => string;
-  getActiveTabUrl: () => string | null;
-  getInputMode: () => "page" | "video";
-  getInputModeOverride: () => "page" | "video" | null;
   getLengthValue: () => string;
-  getPanelPhase: () => "idle" | "connecting" | "streaming" | "error" | "setup";
-  getPanelState: Parameters<typeof createSlidesSummaryController>[0]["getPanelState"];
-  getSlidesEnabled: () => boolean;
   getToken: () => Promise<string>;
   resolveLocalSlides?: (
     runId: string,
@@ -57,7 +45,6 @@ export function createSidepanelSlidesRuntime({
       : null
   >;
   getTranscriptTimedText: () => string | null;
-  getUiState: Parameters<typeof createSlidesSummaryController>[0]["getUiState"];
   headerSetStatus: (text: string) => void;
   hideSlideNotice: () => void;
   isStreaming: () => boolean;
@@ -66,13 +53,8 @@ export function createSidepanelSlidesRuntime({
   renderInlineSlidesFallback: () => void;
   renderMarkdown: (markdown: string) => void;
   schedulePanelCacheSync: () => void;
-  setInputMode: (value: "page" | "video") => void;
-  setInputModeOverride: (value: "page" | "video" | null) => void;
   setSlidesBusy: (value: boolean) => void;
-  setSlidesRunId: (value: string | null) => void;
   showSlideNotice: (message: string, opts?: { allowRetry?: boolean }) => void;
-  stopSlidesStream: () => void;
-  stopSlidesSummaryStream: () => void;
   updateSlideSummaryFromMarkdown: Parameters<
     typeof createSlidesSummaryController
   >[0]["updateSlideSummaryFromMarkdown"];
@@ -81,12 +63,12 @@ export function createSidepanelSlidesRuntime({
     getToken,
     friendlyFetchError,
     panelUrlsMatch,
-    getPanelState,
-    getUiState,
-    getActiveTabUrl,
-    getInputMode,
-    getInputModeOverride,
-    getSlidesEnabled,
+    getPanelState: () => panelState,
+    getUiState: () => panelState.ui,
+    getActiveTabUrl: () => panelState.navigation.activeTabUrl,
+    getInputMode: () => panelState.slidesSession.inputMode,
+    getInputModeOverride: () => panelState.slidesSession.inputModeOverride,
+    getSlidesEnabled: () => panelState.slidesSession.slidesEnabled,
     getLengthValue,
     getTranscriptTimedText,
     clearSummarySource,
@@ -133,34 +115,28 @@ export function createSidepanelSlidesRuntime({
     },
     onDone: () => {
       setSlidesBusy(false);
-      if (getPanelPhase() === "idle") {
+      if (panelState.phase === "idle") {
         headerSetStatus("");
       }
     },
   });
 
   const slidesRunRuntime = createSlidesRunRuntime({
-    getPanelPhase,
-    getPanelState,
-    getUiState,
-    getActiveTabUrl,
-    getInputMode,
-    setInputMode,
-    getInputModeOverride,
-    setInputModeOverride,
-    getSlidesEnabled,
+    panelState,
+    dispatchPanelState,
     refreshSummarizeControl,
-    stopSlidesStream,
-    stopSlidesSummaryStream,
     hideSlideNotice,
     setSlidesBusy,
     schedulePanelCacheSync,
+    isSlidesHydratorStreaming: slidesHydrator.isStreaming,
     startSlidesHydrator: (runId, opts) => {
       void slidesHydrator.start(runId, opts);
     },
+    stopSlidesHydrator: slidesHydrator.stop,
     startSlidesSummaryController: (payload) => {
       void slidesSummaryController.start(payload);
     },
+    stopSlidesSummaryController: slidesSummaryController.stop,
     getSlidesSummaryRunId: () => slidesSummaryController.getRunId(),
     setSlidesSummaryRunId: (value) => {
       slidesSummaryController.setRunId(value);
@@ -174,7 +150,6 @@ export function createSidepanelSlidesRuntime({
     setSlidesSummaryModel: (value) => {
       slidesSummaryController.setModel(value);
     },
-    setSlidesRunId,
     headerSetStatus,
   });
 
@@ -184,8 +159,13 @@ export function createSidepanelSlidesRuntime({
     maybeApplyPendingSlidesSummary,
     slidesHydrator,
     slidesSummaryController,
+    isActiveSlidesRunLocal: slidesRunRuntime.isActiveSlidesRunLocal,
+    maybeStartPendingSlidesForUrl: slidesRunRuntime.maybeStartPendingSlidesForUrl,
+    rememberPendingSlidesRun: slidesRunRuntime.rememberPendingSlidesRun,
+    resolveActiveSlidesRunId: slidesRunRuntime.resolveActiveSlidesRunId,
     startSlidesStream: slidesRunRuntime.startSlidesStream,
     startSlidesStreamForRunId: slidesRunRuntime.startSlidesStreamForRunId,
     startSlidesSummaryStreamForRunId: slidesRunRuntime.startSlidesSummaryStreamForRunId,
+    stopSlidesStream: slidesRunRuntime.stopSlidesStream,
   };
 }

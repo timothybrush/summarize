@@ -38,10 +38,9 @@ import { createPanelCacheController, type PanelCachePayload } from "./panel-cach
 import { createPanelMessagingRuntime } from "./panel-messaging";
 import { createPanelStateStore } from "./panel-state-store";
 import { createPlannedSlidesRuntime } from "./planned-slides-runtime";
-import { normalizePanelUrl, panelUrlsMatch } from "./session-policy";
+import { panelUrlsMatch } from "./session-policy";
 import { createSetupControlsRuntime } from "./setup-controls-runtime";
 import { friendlyFetchError } from "./setup-runtime";
-import { hasResolvedSlidesPayload } from "./slides-pending";
 import { createSidepanelSlidesRuntime } from "./slides-runtime";
 import { resolveSlidesInputMode } from "./slides-session-state";
 import { selectMarkdownForLayout, type SlideTextMode } from "./slides-state";
@@ -265,42 +264,11 @@ function hideSlideNotice() {
 }
 
 function stopSlidesStream() {
-  panelStateStore.dispatch({ type: "active-slides-run", value: null });
-  slidesHydrator.stop();
-  setSlidesBusy(false);
-  panelStateStore.dispatch({ type: "slides-run", runId: null });
-  stopSlidesSummaryStream();
+  slidesRuntime.stopSlidesStream();
 }
 
 function setSlidesTranscriptTimedText(value: string | null) {
   slidesTextController.setTranscriptTimedText(value);
-}
-
-function stopSlidesSummaryStream() {
-  slidesSummaryController.stop();
-}
-
-function resolveActiveSlidesRunId(): string | null {
-  if (panelState.slidesRunId) return panelState.slidesRunId;
-  if (panelState.slides && panelState.runId) return panelState.runId;
-  return null;
-}
-
-function maybeStartPendingSlidesForUrl(url: string | null) {
-  if (!url) return;
-  const key = normalizePanelUrl(url);
-  const pending = panelState.pendingRuns.slidesByUrl[key];
-  if (!pending) return;
-  if (!getSlidesState().slidesEnabled) return;
-  const effectiveInputMode = resolveSlidesInputMode(getSlidesState());
-  if (effectiveInputMode !== "video") return;
-  if (slidesHydrator.isStreaming()) return;
-  panelStateStore.dispatch({ type: "pending-slides-run", urlKey: key, value: null });
-  if (hasResolvedSlidesPayload(panelState.slides, getSlidesState().slidesSeededSourceId)) return;
-  startSlidesStreamForRunId(pending.runId, { url: pending.url, local: Boolean(pending.local) });
-  if (!pending.local) {
-    startSlidesSummaryStreamForRunId(pending.runId, pending.url);
-  }
 }
 
 function showAutomationNotice({
@@ -930,18 +898,13 @@ const slidesRuntime = createSidepanelSlidesRuntime({
   clearSummarySource: () => {
     slidesTextController.clearSummarySource();
   },
+  panelState,
+  dispatchPanelState: panelStateStore.dispatch,
   friendlyFetchError,
-  getActiveTabUrl,
-  getInputMode: () => getSlidesState().inputMode,
-  getInputModeOverride: () => getSlidesState().inputModeOverride,
   getLengthValue: () => appearanceControls.getLengthValue(),
-  getPanelPhase: () => panelState.phase,
-  getPanelState: () => panelState,
-  getSlidesEnabled: () => getSlidesState().slidesEnabled,
   getToken: async () => (await loadSettings()).token,
   resolveLocalSlides,
   getTranscriptTimedText: () => slidesTextController.getTranscriptTimedText(),
-  getUiState: () => panelState.ui,
   headerSetStatus: (text) => {
     headerController.setStatus(text);
   },
@@ -956,50 +919,25 @@ const slidesRuntime = createSidepanelSlidesRuntime({
   schedulePanelCacheSync: () => {
     panelCacheController.scheduleSync();
   },
-  setInputMode: (value) => {
-    updateSlidesState({ inputMode: value });
-  },
-  setInputModeOverride: (value) => {
-    updateSlidesState({ inputModeOverride: value });
-  },
   setSlidesBusy,
-  setSlidesRunId: (value) => {
-    panelStateStore.dispatch({ type: "slides-run", runId: value });
-  },
   showSlideNotice,
-  stopSlidesStream,
-  stopSlidesSummaryStream,
   updateSlideSummaryFromMarkdown,
 });
 const {
   applySlidesSummaryMarkdown,
   handleSlidesStatus,
+  isActiveSlidesRunLocal,
   maybeApplyPendingSlidesSummary,
+  maybeStartPendingSlidesForUrl,
+  rememberPendingSlidesRun,
+  resolveActiveSlidesRunId,
   slidesHydrator: activeSlidesHydrator,
   slidesSummaryController,
   startSlidesStream,
-  startSlidesStreamForRunId: startSlidesStreamForRunIdBase,
-  startSlidesSummaryStreamForRunId: startSlidesSummaryStreamForRunIdBase,
+  startSlidesStreamForRunId,
+  startSlidesSummaryStreamForRunId,
 } = slidesRuntime;
 slidesHydrator = activeSlidesHydrator;
-
-function startSlidesStreamForRunId(runId: string, meta?: { url?: string | null; local?: boolean }) {
-  const currentActiveRun = panelState.slidesLifecycle.activeRun;
-  const existing = currentActiveRun?.runId === runId ? currentActiveRun : null;
-  const activeRun = {
-    runId,
-    url: meta?.url ?? existing?.url ?? panelState.currentSource?.url ?? getActiveTabUrl() ?? null,
-    local: meta?.local ?? existing?.local ?? false,
-  };
-  panelStateStore.dispatch({ type: "active-slides-run", value: activeRun });
-  startSlidesStreamForRunIdBase(runId, { local: activeRun.local });
-}
-
-function startSlidesSummaryStreamForRunId(runId: string, url?: string | null) {
-  const activeRun = panelState.slidesLifecycle.activeRun;
-  if (activeRun?.runId === runId && activeRun.local) return;
-  startSlidesSummaryStreamForRunIdBase(runId, url ?? null);
-}
 
 const summaryStreamRuntime = createSummaryStreamRuntime({
   friendlyFetchError,
@@ -1173,12 +1111,7 @@ const bgMessageRuntime = createSidepanelBgMessageRuntime({
   showSlideNotice,
   getActiveTabUrl,
   rememberPendingSlidesRun: (value) => {
-    if (!value.url) return;
-    panelStateStore.dispatch({
-      type: "pending-slides-run",
-      urlKey: normalizePanelUrl(value.url),
-      value,
-    });
+    rememberPendingSlidesRun(value);
   },
   startSlidesStreamForRunId,
   startSlidesSummaryStreamForRunId: (runId, url) => {
@@ -1317,9 +1250,7 @@ summarizeControlRuntime = createSummarizeControlRuntime({
     sendSummarize(opts);
   },
   resolveActiveSlidesRunId,
-  isActiveSlidesRunLocal: (runId) =>
-    panelState.slidesLifecycle.activeRun?.runId === runId &&
-    panelState.slidesLifecycle.activeRun.local,
+  isActiveSlidesRunLocal,
   startSlidesStreamForRunId,
   startSlidesSummaryStreamForRunId: (runId, url) => {
     startSlidesSummaryStreamForRunId(runId, url ?? null);

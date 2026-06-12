@@ -1,22 +1,19 @@
-import type { RunStart, UiState, PanelState, PanelPhase } from "./types";
+import { applyPanelStateAction, type PanelStateAction } from "./panel-state-store";
+import { normalizePanelUrl } from "./session-policy";
+import { hasResolvedSlidesPayload } from "./slides-pending";
+import { resolveSlidesInputMode } from "./slides-session-state";
+import type { PanelState, RunStart } from "./types";
 
 export function createSlidesRunRuntime(options: {
-  getPanelPhase: () => PanelPhase;
-  getPanelState: () => PanelState;
-  getUiState: () => UiState | null;
-  getActiveTabUrl: () => string | null;
-  getInputMode: () => "page" | "video";
-  setInputMode: (value: "page" | "video") => void;
-  getInputModeOverride: () => "page" | "video" | null;
-  setInputModeOverride: (value: "page" | "video" | null) => void;
-  getSlidesEnabled: () => boolean;
+  panelState: PanelState;
+  dispatchPanelState?: (action: PanelStateAction) => void;
   refreshSummarizeControl: () => void;
-  stopSlidesStream: () => void;
-  stopSlidesSummaryStream: () => void;
   hideSlideNotice: () => void;
   setSlidesBusy: (value: boolean) => void;
   schedulePanelCacheSync: () => void;
+  isSlidesHydratorStreaming: () => boolean;
   startSlidesHydrator: (runId: string, opts?: { local?: boolean }) => void;
+  stopSlidesHydrator: () => void;
   startSlidesSummaryController: (payload: {
     id: string;
     url: string;
@@ -24,78 +21,181 @@ export function createSlidesRunRuntime(options: {
     model: string;
     reason: "slides-summary";
   }) => void;
+  stopSlidesSummaryController: () => void;
   getSlidesSummaryRunId: () => string | null;
   setSlidesSummaryRunId: (value: string | null) => void;
   setSlidesSummaryUrl: (value: string | null) => void;
   resetSlidesSummaryState: () => void;
   setSlidesSummaryModel: (value: string | null) => void;
-  setSlidesRunId: (value: string | null) => void;
   headerSetStatus: (text: string) => void;
 }) {
+  const dispatch = (action: PanelStateAction) => {
+    if (options.dispatchPanelState) {
+      options.dispatchPanelState(action);
+    } else {
+      applyPanelStateAction(options.panelState, action);
+    }
+  };
+
   const ensureVideoMode = () => {
-    const effectiveInputMode = options.getInputModeOverride() ?? options.getInputMode();
-    if (effectiveInputMode === "video") return;
-    options.setInputMode("video");
-    options.setInputModeOverride("video");
+    if (resolveSlidesInputMode(options.panelState.slidesSession) === "video") return;
+    dispatch({
+      type: "slides-session-update",
+      value: {
+        inputMode: "video",
+        inputModeOverride: "video",
+      },
+    });
     options.refreshSummarizeControl();
   };
 
+  const slidesAllowed = () =>
+    options.panelState.slidesSession.slidesEnabled ||
+    Boolean(options.panelState.ui?.settings.slidesEnabled);
+
   const handleSlidesStatus = (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    if (!/^slides?/i.test(trimmed)) return;
+    if (!trimmed || !/^slides?/i.test(trimmed)) return;
     options.setSlidesBusy(true);
-    if (options.getPanelPhase() === "connecting" || options.getPanelPhase() === "streaming") return;
+    if (options.panelState.phase === "connecting" || options.panelState.phase === "streaming")
+      return;
     options.headerSetStatus(trimmed);
   };
 
-  const startSlidesStreamForRunId = (runId: string, opts?: { local?: boolean }) => {
-    const ui = options.getUiState();
-    const slidesAllowed = options.getSlidesEnabled() || ui?.settings.slidesEnabled;
-    if (!slidesAllowed) {
-      options.stopSlidesStream();
+  const stopSlidesSummaryStream = () => {
+    options.stopSlidesSummaryController();
+  };
+
+  const stopSlidesStream = () => {
+    dispatch({ type: "active-slides-run", value: null });
+    options.stopSlidesHydrator();
+    options.setSlidesBusy(false);
+    dispatch({ type: "slides-run", runId: null });
+    stopSlidesSummaryStream();
+  };
+
+  const startSlidesStreamCore = (runId: string, opts?: { local?: boolean }) => {
+    if (!slidesAllowed()) {
+      stopSlidesStream();
       return;
     }
     ensureVideoMode();
     options.hideSlideNotice();
     options.setSlidesBusy(true);
-    options.setSlidesRunId(runId);
+    dispatch({ type: "slides-run", runId });
     options.schedulePanelCacheSync();
     options.startSlidesHydrator(runId, opts);
   };
 
+  const startSlidesStreamForRunId = (
+    runId: string,
+    meta?: { url?: string | null; local?: boolean },
+  ) => {
+    const currentActiveRun = options.panelState.slidesLifecycle.activeRun;
+    const existing = currentActiveRun?.runId === runId ? currentActiveRun : null;
+    const activeRun = {
+      runId,
+      url:
+        meta?.url ??
+        existing?.url ??
+        options.panelState.currentSource?.url ??
+        options.panelState.navigation.activeTabUrl ??
+        null,
+      local: meta?.local ?? existing?.local ?? false,
+    };
+    dispatch({ type: "active-slides-run", value: activeRun });
+    startSlidesStreamCore(runId, { local: activeRun.local });
+  };
+
   const startSlidesStream = (run: RunStart) => {
-    startSlidesStreamForRunId(run.id);
+    startSlidesStreamCore(run.id);
   };
 
   const startSlidesSummaryStreamForRunId = (runId: string, targetUrl?: string | null) => {
-    const ui = options.getUiState();
-    const slidesAllowed = options.getSlidesEnabled() || ui?.settings.slidesEnabled;
-    if (!slidesAllowed) {
-      options.stopSlidesSummaryStream();
+    const activeRun = options.panelState.slidesLifecycle.activeRun;
+    if (activeRun?.runId === runId && activeRun.local) return;
+    if (!slidesAllowed()) {
+      stopSlidesSummaryStream();
       return;
     }
     ensureVideoMode();
     if (options.getSlidesSummaryRunId() === runId) return;
-    options.stopSlidesSummaryStream();
+    stopSlidesSummaryStream();
     options.setSlidesSummaryRunId(runId);
     options.setSlidesSummaryUrl(targetUrl ?? null);
     options.resetSlidesSummaryState();
-    const panelState = options.getPanelState();
-    options.setSlidesSummaryModel(panelState.lastMeta.model ?? ui?.settings.model ?? "auto");
+    const model =
+      options.panelState.lastMeta.model ?? options.panelState.ui?.settings.model ?? "auto";
+    options.setSlidesSummaryModel(model);
     options.startSlidesSummaryController({
       id: runId,
-      url: targetUrl ?? panelState.currentSource?.url ?? options.getActiveTabUrl() ?? "",
-      title: panelState.currentSource?.title ?? null,
-      model: panelState.lastMeta.model ?? "auto",
+      url:
+        targetUrl ??
+        options.panelState.currentSource?.url ??
+        options.panelState.navigation.activeTabUrl ??
+        "",
+      title: options.panelState.currentSource?.title ?? null,
+      model: options.panelState.lastMeta.model ?? "auto",
       reason: "slides-summary",
     });
   };
 
+  const resolveActiveSlidesRunId = () => {
+    if (options.panelState.slidesRunId) return options.panelState.slidesRunId;
+    if (options.panelState.slides && options.panelState.runId) return options.panelState.runId;
+    return null;
+  };
+
+  const isActiveSlidesRunLocal = (runId: string) =>
+    options.panelState.slidesLifecycle.activeRun?.runId === runId &&
+    options.panelState.slidesLifecycle.activeRun.local;
+
+  const rememberPendingSlidesRun = (value: {
+    runId: string;
+    url: string | null;
+    local?: boolean;
+  }) => {
+    if (!value.url) return;
+    dispatch({
+      type: "pending-slides-run",
+      urlKey: normalizePanelUrl(value.url),
+      value,
+    });
+  };
+
+  const maybeStartPendingSlidesForUrl = (url: string | null) => {
+    if (!url) return;
+    const key = normalizePanelUrl(url);
+    const pending = options.panelState.pendingRuns.slidesByUrl[key];
+    if (!pending) return;
+    if (!options.panelState.slidesSession.slidesEnabled) return;
+    if (resolveSlidesInputMode(options.panelState.slidesSession) !== "video") return;
+    if (options.isSlidesHydratorStreaming()) return;
+    dispatch({ type: "pending-slides-run", urlKey: key, value: null });
+    if (
+      hasResolvedSlidesPayload(
+        options.panelState.slides,
+        options.panelState.slidesSession.slidesSeededSourceId,
+      )
+    ) {
+      return;
+    }
+    startSlidesStreamForRunId(pending.runId, {
+      url: pending.url,
+      local: Boolean(pending.local),
+    });
+    if (!pending.local) startSlidesSummaryStreamForRunId(pending.runId, pending.url);
+  };
+
   return {
     handleSlidesStatus,
-    startSlidesStreamForRunId,
+    isActiveSlidesRunLocal,
+    maybeStartPendingSlidesForUrl,
+    rememberPendingSlidesRun,
+    resolveActiveSlidesRunId,
     startSlidesStream,
+    startSlidesStreamForRunId,
     startSlidesSummaryStreamForRunId,
+    stopSlidesStream,
   };
 }
