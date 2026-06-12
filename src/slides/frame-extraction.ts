@@ -10,6 +10,7 @@ import {
   parseShowinfoTimestamp,
   probeVideoInfo,
   resolveExtractedTimestamp,
+  resolveFfmpegVfrArgs,
   roundThreshold,
 } from "./scene-detection.js";
 import type { SlideAutoTune, SlideImage } from "./types.js";
@@ -71,6 +72,8 @@ export async function detectSlideTimestamps({
   }
 
   const segments = buildSegments(videoInfo.durationSeconds, workers);
+  const vfrArgs = await resolveFfmpegVfrArgs({ ffmpegPath, timeoutMs });
+  logSlides?.(`scene detection output sync=${vfrArgs[0]}`);
   const detectStartedAt = Date.now();
   let effectiveThreshold = chosenThreshold;
   let timestamps = await detectSceneTimestamps({
@@ -78,6 +81,7 @@ export async function detectSlideTimestamps({
     inputPath,
     threshold: effectiveThreshold,
     timeoutMs,
+    vfrArgs,
     segments,
     workers,
     onSegmentProgress,
@@ -97,6 +101,7 @@ export async function detectSlideTimestamps({
         inputPath,
         threshold: fallbackThreshold,
         timeoutMs,
+        vfrArgs,
         segments,
         workers,
         onSegmentProgress,

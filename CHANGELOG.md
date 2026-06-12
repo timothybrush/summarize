@@ -9,6 +9,7 @@
 - Development CLI: build the core workspace before `pnpm summarize` and `pnpm s` so newly added core exports never depend on stale generated files.
 - Network safety: block private IPv4 targets embedded in the IPv4-translatable IPv6 prefix.
 - Slides: ignore invalid zero-index slide markers without hanging while extracting slide references.
+- Slides: support FFmpeg 4 scene detection by falling back to its legacy variable-frame-rate option.
 - Summary length: use `long` as the built-in default across the CLI, daemon, and Chrome extension; explicit and configured lengths remain unchanged.
 - YouTube captions: ignore WebVTT header metadata, cue identifiers, comments, styles, and regions when building transcripts.
 

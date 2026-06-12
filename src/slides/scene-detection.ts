@@ -7,6 +7,9 @@ import {
 import type { SlideImage } from "./types.js";
 
 const FFMPEG_TIMEOUT_FALLBACK_MS = 300_000;
+const FFMPEG_CAPABILITY_TIMEOUT_MS = 10_000;
+
+export type FfmpegVfrArgs = ["-fps_mode" | "-vsync", "vfr"];
 
 export type SceneSegment = { start: number; end: number | null };
 
@@ -23,6 +26,27 @@ export function parseShowinfoTimestamp(line: string): number | null {
   const ts = Number(match[1]);
   if (!Number.isFinite(ts)) return null;
   return ts;
+}
+
+export async function resolveFfmpegVfrArgs({
+  ffmpegPath,
+  timeoutMs,
+}: {
+  ffmpegPath: ProcessCommand;
+  timeoutMs: number;
+}): Promise<FfmpegVfrArgs> {
+  try {
+    const help = await runProcessCapture({
+      command: ffmpegPath,
+      args: ["-hide_banner", "-h", "long"],
+      timeoutMs: Math.min(Math.max(timeoutMs, 1), FFMPEG_CAPABILITY_TIMEOUT_MS),
+      errorLabel: "ffmpeg",
+    });
+    if (help.includes("-fps_mode")) return ["-fps_mode", "vfr"];
+  } catch {
+    // Older and minimal builds still support the legacy equivalent.
+  }
+  return ["-vsync", "vfr"];
 }
 
 export function resolveExtractedTimestamp({
@@ -220,6 +244,7 @@ export async function detectSceneTimestamps({
   inputPath,
   threshold,
   timeoutMs,
+  vfrArgs,
   segments,
   workers,
   onSegmentProgress,
@@ -229,6 +254,7 @@ export async function detectSceneTimestamps({
   inputPath: string;
   threshold: number;
   timeoutMs: number;
+  vfrArgs: FfmpegVfrArgs;
   segments?: Array<{ start: number; duration: number }>;
   workers?: number;
   onSegmentProgress?: ((completed: number, total: number) => void) | null;
@@ -254,8 +280,7 @@ export async function detectSceneTimestamps({
         inputPath,
         "-vf",
         filter,
-        "-fps_mode",
-        "vfr",
+        ...vfrArgs,
         "-an",
         "-sn",
         "-f",

@@ -25,6 +25,7 @@ import {
   mergeTimestamps,
   parseShowinfoTimestamp,
   probeVideoInfo,
+  resolveFfmpegVfrArgs,
   selectTimestampTargets,
 } from "../src/slides/scene-detection.js";
 
@@ -136,6 +137,7 @@ describe("slides scene detection", () => {
       inputPath: "/tmp/video.mp4",
       threshold: 0.25,
       timeoutMs: 1000,
+      vfrArgs: ["-vsync", "vfr"],
       segments: [
         { start: 0, duration: 10 },
         { start: 10, duration: 5 },
@@ -160,6 +162,36 @@ describe("slides scene detection", () => {
       [2, 2],
     ]);
     expect(mocks.runProcess).toHaveBeenCalledTimes(2);
+    for (const call of mocks.runProcess.mock.calls) {
+      expect(call[0].args).toContain("-vsync");
+      expect(call[0].args).not.toContain("-fps_mode");
+    }
+  });
+
+  it("selects the supported variable-frame-rate option", async () => {
+    mocks.runProcessCapture.mockResolvedValueOnce(
+      "-fps_mode[:stream_specifier] set framerate mode",
+    );
+    await expect(
+      resolveFfmpegVfrArgs({ ffmpegPath: "ffmpeg", timeoutMs: 30_000 }),
+    ).resolves.toEqual(["-fps_mode", "vfr"]);
+
+    mocks.runProcessCapture.mockResolvedValueOnce("-vsync set video sync method");
+    await expect(
+      resolveFfmpegVfrArgs({ ffmpegPath: "ffmpeg", timeoutMs: 30_000 }),
+    ).resolves.toEqual(["-vsync", "vfr"]);
+
+    mocks.runProcessCapture.mockRejectedValueOnce(new Error("help unavailable"));
+    await expect(
+      resolveFfmpegVfrArgs({ ffmpegPath: "ffmpeg", timeoutMs: 30_000 }),
+    ).resolves.toEqual(["-vsync", "vfr"]);
+
+    expect(mocks.runProcessCapture).toHaveBeenCalledWith({
+      command: "ffmpeg",
+      args: ["-hide_banner", "-h", "long"],
+      timeoutMs: 10_000,
+      errorLabel: "ffmpeg",
+    });
   });
 
   it("parses ffprobe output and falls back to format duration", async () => {
