@@ -1,6 +1,7 @@
 import { buildBrowserAiSummaryMarkdown } from "../../lib/browser-summary";
 import { logExtensionEvent } from "../../lib/extension-logs";
 import type { BgToPanel } from "../../lib/panel-contracts";
+import type { BrowserAiRequestKey } from "./browser-ai-summary-runtime";
 import type { PanelStateAction } from "./panel-state-store";
 import { panelUrlsMatch } from "./session-policy";
 import type { PanelState } from "./types";
@@ -11,7 +12,7 @@ export function createBrowserAiSnapshotRuntime(options: {
   panelState: PanelState;
   dispatchPanelState: (action: PanelStateAction) => void;
   browserAi: {
-    cancel: () => void;
+    cancel: (requestKey?: BrowserAiRequestKey) => void;
     summarize: (options: {
       input: NonNullable<BrowserSummarySnapshot["browserAi"]>;
       context?: string;
@@ -21,7 +22,7 @@ export function createBrowserAiSnapshotRuntime(options: {
 }) {
   const enhance = (snapshot: BrowserSummarySnapshot) => {
     if (!snapshot.browserAi) {
-      options.browserAi.cancel();
+      options.browserAi.cancel("summary");
       return;
     }
     const runId = snapshot.run.id;
@@ -73,7 +74,7 @@ export function createBrowserAiSnapshotRuntime(options: {
   };
 
   return {
-    cancel: options.browserAi.cancel,
+    cancel: () => options.browserAi.cancel("summary"),
     enhance,
   };
 }

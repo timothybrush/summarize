@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   assertNoErrors,
+  buildUiState,
   closeExtension,
   getBrowserFromProject,
   launchExtension,
@@ -9,7 +10,15 @@ import {
   trackErrors,
   waitForPanelPort,
 } from "./helpers/extension-harness";
-import { getPanelModel, getPanelSummaryMarkdown } from "./helpers/panel-hooks";
+import {
+  applySlidesPayload,
+  getPanelModel,
+  getPanelSlideDescriptions,
+  getPanelSlidesSummaryComplete,
+  getPanelSlidesSummaryMarkdown,
+  getPanelSlidesSummaryModel,
+  getPanelSummaryMarkdown,
+} from "./helpers/panel-hooks";
 
 test("browser AI keeps the native session receiver", async ({
   browserName: _browserName,
@@ -59,6 +68,97 @@ test("browser AI keeps the native session receiver", async ({
 
     await expect.poll(() => getPanelModel(page)).toBe("Gemini Nano");
     await expect.poll(() => getPanelSummaryMarkdown(page)).toContain("- Native summary point");
+    assertNoErrors(harness);
+  } finally {
+    await closeExtension(harness.context, harness.userDataDir);
+  }
+});
+
+test("browser AI creates distinct summaries for browser-extracted slides", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const harness = await launchExtension(getBrowserFromProject(testInfo.project.name));
+
+  try {
+    const page = await openExtensionPage(harness, "sidepanel.html", "#title", () => {
+      Object.defineProperty(globalThis, "Summarizer", {
+        configurable: true,
+        value: {
+          availability: async () => "available",
+          create: async () => ({
+            async summarize(input: string, options?: { context?: string }) {
+              if (options?.context?.includes("slide 1 of 2")) {
+                return "Linear classifiers learn a decision boundary between labeled examples.";
+              }
+              if (options?.context?.includes("slide 2 of 2")) {
+                return "The sigmoid converts model scores into class probabilities.";
+              }
+              return `Overall summary of ${input.slice(0, 20)}.`;
+            },
+          }),
+        },
+      });
+    });
+    trackErrors(page, harness.pageErrors, harness.consoleErrors);
+    await waitForPanelPort(page);
+    const url = "https://www.youtube.com/watch?v=browser-ai-slides";
+    const uiState = buildUiState({
+      tab: { id: 1, url, title: "Machine Learning Lecture" },
+    });
+    Object.assign(uiState.settings, {
+      slideRuntime: "browser",
+      summaryRuntime: "direct",
+      providerConfigured: false,
+      model: "auto",
+    });
+
+    await sendBgMessage(harness, {
+      type: "ui:state",
+      state: uiState,
+    });
+    await sendBgMessage(harness, {
+      type: "run:snapshot",
+      run: {
+        id: "browser-ai-slides-summary",
+        url,
+        title: "Machine Learning Lecture",
+        model: "Browser",
+        reason: "manual",
+      },
+      markdown: "## Machine Learning Lecture\n\nFallback summary.",
+      browserAi: {
+        text: "The lecture introduces classification and logistic regression.",
+        length: "long",
+        keyMoments: [],
+      },
+    });
+    await applySlidesPayload(page, {
+      sourceUrl: url,
+      sourceId: "browser-ai-slide-source",
+      sourceKind: "youtube",
+      slideRuntime: "browser",
+      ocrAvailable: false,
+      transcriptTimedText:
+        "[00:00] The first section explains linear decision boundaries and labeled examples.\n" +
+        "[01:00] The second section derives the sigmoid and probability interpretation.",
+      slides: [
+        { index: 1, timestamp: 0, imageUrl: "" },
+        { index: 2, timestamp: 60, imageUrl: "" },
+      ],
+    });
+
+    await expect.poll(() => getPanelSlidesSummaryComplete(page)).toBe(true);
+    await expect.poll(() => getPanelSlidesSummaryModel(page)).toBe("Gemini Nano");
+    const markdown = await getPanelSlidesSummaryMarkdown(page);
+    expect(markdown).toContain("[slide:1]");
+    expect(markdown).toContain("Linear classifiers learn a decision boundary");
+    expect(markdown).toContain("[slide:2]");
+    expect(markdown).toContain("The sigmoid converts model scores");
+    expect(markdown).not.toContain("The first section explains");
+    expect(await getPanelSlideDescriptions(page)).toEqual([
+      [1, "Linear classifiers learn a decision boundary between labeled examples."],
+      [2, "The sigmoid converts model scores into class probabilities."],
+    ]);
     assertNoErrors(harness);
   } finally {
     await closeExtension(harness.context, harness.userDataDir);

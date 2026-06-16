@@ -60,7 +60,7 @@ function renderKeyMoments(keyMoments: BrowserAiSummaryInput["keyMoments"]): stri
   ];
 }
 
-function normalizeGeneratedPoints(value: string): string[] {
+export function normalizeBrowserAiGeneratedPoints(value: string): string[] {
   return value
     .replace(/^```(?:text|markdown)?\s*/i, "")
     .replace(/\s*```$/, "")
@@ -126,7 +126,7 @@ export function buildBrowserAiSummaryMarkdown({
   keyMoments: BrowserAiSummaryInput["keyMoments"];
 }): string {
   const heading = title?.trim() ? `## ${escapeMarkdownText(title.trim())}` : "## Summary";
-  const points = normalizeGeneratedPoints(summary);
+  const points = normalizeBrowserAiGeneratedPoints(summary);
   const body =
     points.length > 1
       ? points.map((point) => `- ${escapeMarkdownText(point)}`).join("\n")

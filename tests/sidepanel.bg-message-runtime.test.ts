@@ -30,6 +30,7 @@ function createRuntime(
     setSlidesContextPending: vi.fn(),
     setSlidesTranscriptTimedText: vi.fn(),
     updateSlidesTextState: vi.fn(),
+    refreshBrowserAiSlides: vi.fn(),
     updateSlideSummaryFromMarkdown: vi.fn(),
     renderInlineSlidesFallback: vi.fn(),
     schedulePanelCacheSync: vi.fn(),
@@ -242,6 +243,7 @@ describe("sidepanel background message runtime", () => {
     });
     expect(options.renderInlineSlidesFallback).toHaveBeenCalled();
     expect(options.schedulePanelCacheSync).toHaveBeenCalled();
+    expect(options.refreshBrowserAiSlides).toHaveBeenCalled();
   });
 
   it("routes simple delegated messages", () => {

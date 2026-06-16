@@ -96,6 +96,7 @@ export function createSidepanelBgMessageRuntime(options: {
   setSlidesContextPending: (value: boolean) => void;
   setSlidesTranscriptTimedText: (value: string | null) => void;
   updateSlidesTextState: () => void;
+  refreshBrowserAiSlides: () => void | Promise<void>;
   updateSlideSummaryFromMarkdown: (
     markdown: string,
     opts?: {
@@ -203,6 +204,7 @@ export function createSidepanelBgMessageRuntime(options: {
           }
           if (!slidesContext.ok) return;
           options.schedulePanelCacheSync();
+          void options.refreshBrowserAiSlides();
         },
         handleUiCache: (cacheMessage: UiCacheMessage) => {
           const result = options.consumeUiCache(cacheMessage);

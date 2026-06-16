@@ -47,6 +47,7 @@ type SummaryViewRuntimeOpts = {
   updateSlidesTextState: () => void;
   requestSlidesContext: () => void | Promise<void>;
   requestSlidesCapture: () => void;
+  refreshBrowserAiSlides: () => void | Promise<void>;
   updateSlideSummaryFromMarkdown: (
     markdown: string,
     opts?: { preserveIfEmpty?: boolean; source?: "summary" | "slides" },
@@ -217,6 +218,9 @@ export function createSummaryViewRuntime(opts: SummaryViewRuntimeOpts) {
     }
     opts.queueSlidesRender();
     opts.setPhase("idle");
+    if (hasNormalizedSlides) {
+      void opts.refreshBrowserAiSlides();
+    }
   }
 
   return {

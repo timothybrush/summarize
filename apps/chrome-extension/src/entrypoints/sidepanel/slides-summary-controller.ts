@@ -101,6 +101,53 @@ export function createSlidesSummaryController(options: SlidesSummaryControllerOp
     applyMarkdown(markdown);
   };
 
+  const applyGeneratedSummary = ({
+    runId,
+    url,
+    markdown,
+    model,
+    complete,
+  }: {
+    runId: string;
+    url: string | null;
+    markdown: string;
+    model: string;
+    complete: boolean;
+  }) => {
+    const currentUrl = getCurrentUrl();
+    if (url && currentUrl && !options.panelUrlsMatch(url, currentUrl)) return;
+    const state = getState();
+    if (state.runId && state.runId !== runId) return;
+    updateState({
+      runId,
+      url,
+      markdown,
+      model,
+      complete,
+      hadError: false,
+      pending: null,
+    });
+    if (!markdown.trim()) return;
+    if (!complete) {
+      if (options.getSlidesEnabled() && getEffectiveInputMode() === "video") {
+        options.updateSlideSummaryFromMarkdown(markdown, {
+          preserveIfEmpty: true,
+          source: "slides-partial",
+        });
+        if (options.getPanelState().summaryMarkdown && options.getPanelState().slides) {
+          options.renderInlineSlidesFallback();
+        }
+      }
+      return;
+    }
+    const phase = options.getPanelState().phase;
+    if (phase === "connecting" || phase === "streaming") {
+      updateState({ pending: markdown });
+      return;
+    }
+    applyMarkdown(markdown);
+  };
+
   const createGenerationStreamController = (generation: number) =>
     createStreamController({
       getToken: options.getToken,
@@ -224,6 +271,7 @@ export function createSlidesSummaryController(options: SlidesSummaryControllerOp
     setModel(value: string | null) {
       updateState({ model: value });
     },
+    applyGeneratedSummary,
     applyMarkdown,
     maybeApplyPending,
   };

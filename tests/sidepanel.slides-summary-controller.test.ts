@@ -229,6 +229,65 @@ describe("slides summary controller", () => {
     });
   });
 
+  it("applies progressive browser AI slide summaries and finalizes them", () => {
+    const panelState = buildPanelState();
+    addSlides(panelState);
+    panelState.summaryMarkdown = "Primary summary";
+    const updateSlideSummaryFromMarkdown = vi.fn();
+    const renderInlineSlidesFallback = vi.fn();
+    const controller = createSlidesSummaryController({
+      getToken: async () => "token",
+      friendlyFetchError: (_error, fallback) => fallback,
+      panelUrlsMatch: (left, right) => left === right,
+      getPanelState: () => panelState,
+      getUiState: () => panelState.ui,
+      getActiveTabUrl: () => panelState.currentSource?.url ?? null,
+      getInputMode: () => "video",
+      getInputModeOverride: () => "video",
+      getSlidesEnabled: () => true,
+      getLengthValue: () => "medium",
+      getTranscriptTimedText: () => null,
+      clearSummarySource: vi.fn(),
+      updateSlideSummaryFromMarkdown,
+      renderMarkdown: vi.fn(),
+      renderInlineSlidesFallback,
+    });
+
+    controller.applyGeneratedSummary({
+      runId: "browser-slides",
+      url: "https://example.com/video",
+      markdown: "[slide:1]\n## First concept\nPartial result.",
+      model: "Gemini Nano",
+      complete: false,
+    });
+
+    expect(controller.getSnapshot()).toEqual({
+      runId: "browser-slides",
+      markdown: "[slide:1]\n## First concept\nPartial result.",
+      complete: false,
+      model: "Gemini Nano",
+    });
+    expect(updateSlideSummaryFromMarkdown).toHaveBeenLastCalledWith(expect.any(String), {
+      preserveIfEmpty: true,
+      source: "slides-partial",
+    });
+    expect(renderInlineSlidesFallback).toHaveBeenCalledOnce();
+
+    controller.applyGeneratedSummary({
+      runId: "browser-slides",
+      url: "https://example.com/video",
+      markdown: "[slide:1]\n## First concept\nFinal result.",
+      model: "Gemini Nano",
+      complete: true,
+    });
+
+    expect(controller.getComplete()).toBe(true);
+    expect(updateSlideSummaryFromMarkdown).toHaveBeenLastCalledWith(expect.any(String), {
+      preserveIfEmpty: false,
+      source: "slides",
+    });
+  });
+
   it("handles stream lifecycle callbacks for render, meta, error, reset, and done", () => {
     const panelState = buildPanelState();
     panelState.summaryMarkdown = "Primary summary";

@@ -4,8 +4,14 @@ import { createSidepanelSlidesRuntime } from "../apps/chrome-extension/src/entry
 
 let capturedHydratorOptions: Record<string, Function> | null = null;
 let capturedRunOptions: Record<string, unknown> | null = null;
+let browserAiSlidesRuntime: {
+  cancel: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
+} | null = null;
 let summaryController: {
+  applyGeneratedSummary: ReturnType<typeof vi.fn>;
   applyMarkdown: ReturnType<typeof vi.fn>;
+  getMarkdown: ReturnType<typeof vi.fn>;
   maybeApplyPending: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
@@ -28,7 +34,9 @@ let hydrator: {
 vi.mock("../apps/chrome-extension/src/entrypoints/sidepanel/slides-summary-controller", () => ({
   createSlidesSummaryController: vi.fn(() => {
     summaryController = {
+      applyGeneratedSummary: vi.fn(),
       applyMarkdown: vi.fn(),
+      getMarkdown: vi.fn(() => ""),
       maybeApplyPending: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
@@ -40,6 +48,17 @@ vi.mock("../apps/chrome-extension/src/entrypoints/sidepanel/slides-summary-contr
     };
     return summaryController;
   }),
+}));
+
+vi.mock("../apps/chrome-extension/src/entrypoints/sidepanel/browser-ai-slides-runtime", () => ({
+  createBrowserAiSlidesRuntime: vi.fn(() => {
+    browserAiSlidesRuntime = {
+      cancel: vi.fn(),
+      refresh: vi.fn(async () => {}),
+    };
+    return browserAiSlidesRuntime;
+  }),
+  shouldUseBrowserAiForSlides: vi.fn(() => false),
 }));
 
 vi.mock("../apps/chrome-extension/src/entrypoints/sidepanel/slides-hydrator", () => ({
@@ -80,6 +99,7 @@ function createRuntime(options: { phase?: "idle" | "streaming"; summaryStreaming
   panelState.phase = options.phase ?? "idle";
   return createSidepanelSlidesRuntime({
     applySlidesPayload: vi.fn(),
+    browserAi: {} as never,
     clearSummarySource: vi.fn(),
     panelState,
     friendlyFetchError: vi.fn((_error, fallback) => fallback),
@@ -104,6 +124,7 @@ describe("sidepanel slides runtime", () => {
   beforeEach(() => {
     capturedHydratorOptions = null;
     capturedRunOptions = null;
+    browserAiSlidesRuntime = null;
     summaryController = null;
     hydrator = null;
     vi.clearAllMocks();
@@ -126,6 +147,7 @@ describe("sidepanel slides runtime", () => {
     const panelState = createInitialPanelState();
     createSidepanelSlidesRuntime({
       applySlidesPayload: vi.fn(),
+      browserAi: {} as never,
       clearSummarySource: vi.fn(),
       panelState,
       friendlyFetchError: vi.fn(() => "friendly slides error"),
@@ -155,7 +177,12 @@ describe("sidepanel slides runtime", () => {
     expect(hydrator?.hydrateSnapshot).toHaveBeenCalledWith("timeout");
     expect(capturedRunOptions?.startSlidesHydrator).toBeTypeOf("function");
     expect(capturedRunOptions?.stopSlidesHydrator).toBe(hydrator?.stop);
-    expect(capturedRunOptions?.stopSlidesSummaryController).toBe(summaryController?.stop);
+    const stopSlidesSummaryController = capturedRunOptions?.stopSlidesSummaryController as
+      | (() => void)
+      | undefined;
+    stopSlidesSummaryController?.();
+    expect(browserAiSlidesRuntime?.cancel).toHaveBeenCalledOnce();
+    expect(summaryController?.stop).toHaveBeenCalledOnce();
   });
 
   it("keeps the header text when summary streaming is still active", async () => {
@@ -165,6 +192,7 @@ describe("sidepanel slides runtime", () => {
     panelState.phase = "streaming";
     createSidepanelSlidesRuntime({
       applySlidesPayload: vi.fn(),
+      browserAi: {} as never,
       clearSummarySource: vi.fn(),
       panelState,
       friendlyFetchError: vi.fn(() => "friendly slides error"),
@@ -218,6 +246,7 @@ describe("sidepanel slides runtime", () => {
         startSlidesStreamForRunId: expect.any(Function),
         startSlidesSummaryStreamForRunId: expect.any(Function),
         stopSlidesStream: expect.any(Function),
+        refreshBrowserAiSlides: expect.any(Function),
       }),
     );
   });

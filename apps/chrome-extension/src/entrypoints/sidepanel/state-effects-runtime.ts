@@ -71,6 +71,7 @@ export function createSidepanelStateEffectsRuntime({
     resolveActiveSlidesRunId,
     startSlidesStreamForRunId,
     startSlidesSummaryStreamForRunId,
+    refreshBrowserAiSlides,
   } = slidesRuntime;
   const { rebuildSlideDescriptions, renderMarkdownDisplay, setSlidesBusy, updateSlidesTextState } =
     slidesViewRuntime;
@@ -162,6 +163,7 @@ export function createSidepanelStateEffectsRuntime({
     },
     setSlidesTranscriptTimedText,
     updateSlidesTextState,
+    refreshBrowserAiSlides,
     updateSlideSummaryFromMarkdown,
     renderInlineSlidesFallback: () => {
       renderInlineSlides(dom.renderMarkdownHostEl, { fallback: true });

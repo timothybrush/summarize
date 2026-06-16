@@ -27,6 +27,7 @@ function createHarness(
     hydratorStreaming?: boolean;
     panelState?: PanelState;
     summaryRunId?: string | null;
+    useBrowserAiSlides?: boolean;
   } = {},
 ) {
   const panelState = options.panelState ?? createInitialPanelState();
@@ -69,6 +70,7 @@ function createHarness(
     setSlidesSummaryUrl: calls.setSlidesSummaryUrl,
     resetSlidesSummaryState: calls.resetSlidesSummaryState,
     setSlidesSummaryModel: calls.setSlidesSummaryModel,
+    shouldUseBrowserAiSlides: () => options.useBrowserAiSlides ?? false,
     headerSetStatus: calls.headerSetStatus,
   });
   return { calls, panelState, runtime };
@@ -235,6 +237,15 @@ describe("slides run runtime", () => {
       reason: "slides-summary",
     });
     expect(harness.calls.startSlidesSummaryController).toHaveBeenCalledOnce();
+  });
+
+  it("skips daemon summary streaming when browser AI owns slide summaries", () => {
+    const harness = createHarness({ useBrowserAiSlides: true });
+
+    harness.runtime.startSlidesSummaryStreamForRunId("remote-run");
+
+    expect(harness.calls.stopSlidesSummaryController).toHaveBeenCalledOnce();
+    expect(harness.calls.startSlidesSummaryController).not.toHaveBeenCalled();
   });
 
   it("stops summary-only work when slides become disabled", () => {

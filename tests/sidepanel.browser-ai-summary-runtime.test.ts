@@ -135,4 +135,38 @@ describe("sidepanel browser AI summary runtime", () => {
     expect(result).toBe("final");
     expect(summarize).toHaveBeenCalledTimes(3);
   });
+
+  it("keeps overall and slide requests isolated", async () => {
+    let resolveSummary: ((value: string) => void) | null = null;
+    const summaryResult = new Promise<string>((resolve) => {
+      resolveSummary = resolve;
+    });
+    const summarySummarize = vi.fn(() => summaryResult);
+    const slidesSummarize = vi.fn(async () => "Slide result");
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ summarize: summarySummarize })
+      .mockResolvedValueOnce({ summarize: slidesSummarize });
+    const runtime = createBrowserAiSummaryRuntime({
+      getApi: () => ({
+        availability: vi.fn(async () => "available" as const),
+        create,
+      }),
+      isUserActive: () => false,
+      setStatus: vi.fn(),
+    });
+
+    const overall = runtime.summarize({
+      input: { text: "Overall source", length: "short", keyMoments: [] },
+    });
+    const slide = runtime.summarize({
+      input: { text: "Slide source", length: "short", keyMoments: [] },
+      requestKey: "slides",
+    });
+
+    await expect(slide).resolves.toBe("Slide result");
+    resolveSummary?.("Overall result");
+    await expect(overall).resolves.toBe("Overall result");
+    expect(create).toHaveBeenCalledTimes(2);
+  });
 });

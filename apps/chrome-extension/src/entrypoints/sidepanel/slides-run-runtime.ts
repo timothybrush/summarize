@@ -27,6 +27,7 @@ export function createSlidesRunRuntime(options: {
   setSlidesSummaryUrl: (value: string | null) => void;
   resetSlidesSummaryState: () => void;
   setSlidesSummaryModel: (value: string | null) => void;
+  shouldUseBrowserAiSlides: () => boolean;
   headerSetStatus: (text: string) => void;
 }) {
   const dispatch = (action: PanelStateAction) => {
@@ -114,6 +115,10 @@ export function createSlidesRunRuntime(options: {
   const startSlidesSummaryStreamForRunId = (runId: string, targetUrl?: string | null) => {
     const activeRun = options.panelState.slidesLifecycle.activeRun;
     if (activeRun?.runId === runId && activeRun.local) return;
+    if (options.shouldUseBrowserAiSlides()) {
+      stopSlidesSummaryStream();
+      return;
+    }
     if (!slidesAllowed()) {
       stopSlidesSummaryStream();
       return;

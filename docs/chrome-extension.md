@@ -15,7 +15,7 @@ Quickstart:
 - Build/load extension: `apps/chrome-extension/README.md`
 - Direct mode works immediately without a daemon. Auto uses a configured provider, otherwise Gemini Nano when available with extractive fallback.
 - Configured direct providers support summaries, chat, automation, hover summaries, and public-URL extraction without a daemon. Provider keys stay in extension-local storage.
-- Browser media provides daemonless transcription and slides. OCR, process/log tools, CLI fallbacks, and broader native media support require the daemon.
+- Browser media provides daemonless transcription, slide extraction, and Gemini Nano per-slide summaries. OCR, process/log tools, CLI fallbacks, and broader native media support require the daemon.
 - Optional: install summarize for daemon-backed media support:
   - `npm i -g @steipete/summarize`
   - `brew install summarize` (macOS, Linux)

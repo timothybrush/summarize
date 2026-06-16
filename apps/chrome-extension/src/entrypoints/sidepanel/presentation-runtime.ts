@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { isGeminiNanoModel } from "../../lib/model-routing";
 import type { PanelToBg } from "../../lib/panel-contracts";
 import { loadSettings, patchSettings } from "../../lib/settings";
 import type { createAppearanceControls } from "./appearance-controls";
@@ -137,9 +138,17 @@ export function createSidepanelPresentationRuntime({
     clearInlineError: errorController.clearInlineError,
     getInputModeOverride: () => panelState.slidesSession.inputModeOverride,
     prepareBrowserAi: () => {
-      if (panelState.ui?.settings.slideRuntime !== "browser") return;
+      const settings = panelState.ui?.settings;
+      if (!settings) return;
+      const useBrowserAi =
+        isGeminiNanoModel(settings.model) ||
+        (settings.summaryRuntime === "direct" &&
+          settings.model.trim().toLowerCase() === "auto" &&
+          !settings.providerConfigured);
+      if (!useBrowserAi) return;
       const length = appearanceControls.getLengthValue();
       browserAiRuntime.prepare(length === "short" || length === "medium" ? length : "long");
+      browserAiRuntime.prepare("short", "slides");
     },
   });
 
@@ -182,8 +191,10 @@ export function createSidepanelPresentationRuntime({
     retainRenderedSlideSummary(panelState, dispatchPanelState, value);
     slidesViewRuntime.renderMarkdown(value);
   };
+  let refreshBrowserAiSlides = () => {};
   const applySlidesPayload = (data: Parameters<typeof slidesViewRuntime.applySlidesPayload>[0]) => {
     slidesViewRuntime.applySlidesPayload(data, setSlidesTranscriptTimedText);
+    refreshBrowserAiSlides();
   };
   const renderInlineSlidesFallback = () => {
     slidesViewRuntime.renderInlineSlides(dom.renderMarkdownHostEl, { fallback: true });
@@ -191,6 +202,7 @@ export function createSidepanelPresentationRuntime({
 
   const slidesRuntime = createSidepanelSlidesRuntime({
     applySlidesPayload,
+    browserAi: browserAiRuntime,
     clearSummarySource: slidesTextController.clearSummarySource,
     panelState,
     dispatchPanelState,
@@ -213,6 +225,9 @@ export function createSidepanelPresentationRuntime({
     showSlideNotice,
     updateSlideSummaryFromMarkdown: slidesViewRuntime.updateSlideSummaryFromMarkdown,
   });
+  refreshBrowserAiSlides = () => {
+    void slidesRuntime.refreshBrowserAiSlides();
+  };
 
   const summarizeControlRuntime = createSummarizeControlRuntime({
     renderMarkdownHostEl: dom.renderMarkdownHostEl,
@@ -283,6 +298,7 @@ export function createSidepanelPresentationRuntime({
     requestSlidesCapture: () => {
       void send({ type: "panel:slides-capture" });
     },
+    refreshBrowserAiSlides: slidesRuntime.refreshBrowserAiSlides,
     updateSlideSummaryFromMarkdown: slidesViewRuntime.updateSlideSummaryFromMarkdown,
     renderMarkdown,
     renderMarkdownDisplay: slidesViewRuntime.renderMarkdownDisplay,

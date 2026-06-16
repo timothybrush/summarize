@@ -1,3 +1,8 @@
+import {
+  createBrowserAiSlidesRuntime,
+  shouldUseBrowserAiForSlides,
+} from "./browser-ai-slides-runtime";
+import type { createBrowserAiSummaryRuntime } from "./browser-ai-summary-runtime";
 import type { PanelStateAction } from "./panel-state-store";
 import { createSlidesHydrator } from "./slides-hydrator";
 import { createSlidesRunRuntime } from "./slides-run-runtime";
@@ -6,6 +11,7 @@ import type { PanelState } from "./types";
 
 export function createSidepanelSlidesRuntime({
   applySlidesPayload,
+  browserAi,
   clearSummarySource,
   panelState,
   dispatchPanelState,
@@ -31,6 +37,7 @@ export function createSidepanelSlidesRuntime({
       ? T
       : never,
   ) => void;
+  browserAi: ReturnType<typeof createBrowserAiSummaryRuntime>;
   clearSummarySource: () => void;
   panelState: PanelState;
   dispatchPanelState?: (action: PanelStateAction) => void;
@@ -86,6 +93,14 @@ export function createSidepanelSlidesRuntime({
     slidesSummaryController.maybeApplyPending();
   };
 
+  const browserAiSlidesRuntime = createBrowserAiSlidesRuntime({
+    panelState,
+    browserAi,
+    getTranscriptTimedText,
+    applyGeneratedSummary: slidesSummaryController.applyGeneratedSummary,
+    schedulePanelCacheSync,
+  });
+
   const slidesHydrator = createSlidesHydrator({
     getToken,
     resolveLocalSlides,
@@ -135,9 +150,13 @@ export function createSidepanelSlidesRuntime({
     },
     stopSlidesHydrator: slidesHydrator.stop,
     startSlidesSummaryController: (payload) => {
+      browserAiSlidesRuntime.cancel();
       void slidesSummaryController.start(payload);
     },
-    stopSlidesSummaryController: slidesSummaryController.stop,
+    stopSlidesSummaryController: () => {
+      browserAiSlidesRuntime.cancel();
+      slidesSummaryController.stop();
+    },
     getSlidesSummaryRunId: () => slidesSummaryController.getRunId(),
     setSlidesSummaryRunId: (value) => {
       slidesSummaryController.setRunId(value);
@@ -151,6 +170,7 @@ export function createSidepanelSlidesRuntime({
     setSlidesSummaryModel: (value) => {
       slidesSummaryController.setModel(value);
     },
+    shouldUseBrowserAiSlides: () => shouldUseBrowserAiForSlides(panelState),
     headerSetStatus,
   });
 
@@ -158,6 +178,7 @@ export function createSidepanelSlidesRuntime({
     applySlidesSummaryMarkdown,
     handleSlidesStatus: slidesRunRuntime.handleSlidesStatus,
     maybeApplyPendingSlidesSummary,
+    refreshBrowserAiSlides: browserAiSlidesRuntime.refresh,
     slidesHydrator,
     isActiveSlidesRunLocal: slidesRunRuntime.isActiveSlidesRunLocal,
     maybeStartPendingSlidesForUrl: slidesRunRuntime.maybeStartPendingSlidesForUrl,

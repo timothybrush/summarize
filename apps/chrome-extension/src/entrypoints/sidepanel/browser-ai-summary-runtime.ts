@@ -29,6 +29,8 @@ type RuntimeOptions = {
   setStatus: (status: string) => void;
 };
 
+export type BrowserAiRequestKey = "summary" | "slides";
+
 function defaultGetApi(): BrowserSummarizerApi | null {
   const api = (globalThis as typeof globalThis & { Summarizer?: BrowserSummarizerApi }).Summarizer;
   return api && typeof api.availability === "function" && typeof api.create === "function"
@@ -197,17 +199,30 @@ async function summarizeRecursively({
 export function createBrowserAiSummaryRuntime(options: RuntimeOptions) {
   const getApi = options.getApi ?? defaultGetApi;
   const isUserActive = options.isUserActive ?? defaultIsUserActive;
-  const sessions = new Map<
-    BrowserAiSummaryInput["length"],
-    Promise<BrowserSummarizerSession | null>
-  >();
-  let activeRequest = 0;
-  let activeController: AbortController | null = null;
+  const sessions = new Map<string, Promise<BrowserSummarizerSession | null>>();
+  const activeRequests = new Map<BrowserAiRequestKey, number>();
+  const activeControllers = new Map<BrowserAiRequestKey, AbortController>();
+  let statusOwner: { requestKey: BrowserAiRequestKey; token: symbol } | null = null;
+
+  const sessionKey = (requestKey: BrowserAiRequestKey, length: BrowserAiSummaryInput["length"]) =>
+    `${requestKey}:${length}`;
+  const setOwnedStatus = (requestKey: BrowserAiRequestKey, owner: symbol, status: string) => {
+    statusOwner = { requestKey, token: owner };
+    options.setStatus(status);
+  };
+  const clearOwnedStatus = (owner: symbol) => {
+    if (statusOwner?.token !== owner) return;
+    statusOwner = null;
+    options.setStatus("");
+  };
 
   const createSession = (
     api: BrowserSummarizerApi,
     length: BrowserAiSummaryInput["length"],
+    requestKey: BrowserAiRequestKey,
+    statusToken: symbol,
   ): Promise<BrowserSummarizerSession | null> => {
+    const key = sessionKey(requestKey, length);
     const promise = api
       .create({
         type: "key-points",
@@ -220,7 +235,7 @@ export function createBrowserAiSummaryRuntime(options: RuntimeOptions) {
               typeof loaded === "number" && Number.isFinite(loaded)
                 ? ` ${Math.round(loaded * 100)}%`
                 : "";
-            options.setStatus(`Downloading on-device AI…${percent}`);
+            setOwnedStatus(requestKey, statusToken, `Downloading on-device AI…${percent}`);
           });
         },
       })
@@ -229,19 +244,22 @@ export function createBrowserAiSummaryRuntime(options: RuntimeOptions) {
           event: "browser-ai:create-error",
           level: "warn",
           scope: "sidepanel",
-          detail: { length, ...errorDetail(error) },
+          detail: { length, requestKey, ...errorDetail(error) },
         });
-        sessions.delete(length);
+        sessions.delete(key);
         return null;
       });
-    sessions.set(length, promise);
+    sessions.set(key, promise);
     return promise;
   };
 
   const ensureSession = async (
     length: BrowserAiSummaryInput["length"],
+    requestKey: BrowserAiRequestKey,
+    statusToken: symbol,
   ): Promise<BrowserSummarizerSession | null> => {
-    const cached = sessions.get(length);
+    const key = sessionKey(requestKey, length);
+    const cached = sessions.get(key);
     if (cached) return await cached;
     const api = getApi();
     if (!api) return null;
@@ -256,51 +274,70 @@ export function createBrowserAiSummaryRuntime(options: RuntimeOptions) {
     });
     if (availability === "unavailable") return null;
     if (availability === "downloadable" && !isUserActive()) return null;
-    return await createSession(api, length);
+    return await createSession(api, length, requestKey, statusToken);
   };
 
-  const prepare = (length: BrowserAiSummaryInput["length"]) => {
-    if (!isUserActive() || sessions.has(length)) return;
+  const prepare = (
+    length: BrowserAiSummaryInput["length"],
+    requestKey: BrowserAiRequestKey = "summary",
+  ) => {
+    const key = sessionKey(requestKey, length);
+    if (!isUserActive() || sessions.has(key)) return;
     const api = getApi();
     if (!api) return;
-    void createSession(api, length).then((session) => {
-      if (!session) options.setStatus("");
+    const statusToken = Symbol(`browser-ai:${requestKey}:prepare`);
+    void createSession(api, length, requestKey, statusToken).then(() => {
+      clearOwnedStatus(statusToken);
     });
   };
 
-  const cancel = () => {
-    activeRequest += 1;
-    activeController?.abort();
-    activeController = null;
-    options.setStatus("");
+  const cancel = (requestKey?: BrowserAiRequestKey) => {
+    const requestKeys = requestKey
+      ? [requestKey]
+      : (["summary", "slides"] satisfies BrowserAiRequestKey[]);
+    for (const key of requestKeys) {
+      activeRequests.set(key, (activeRequests.get(key) ?? 0) + 1);
+      activeControllers.get(key)?.abort();
+      activeControllers.delete(key);
+    }
+    if (!requestKey || statusOwner?.requestKey === requestKey) {
+      statusOwner = null;
+      options.setStatus("");
+    }
   };
 
   const summarize = async ({
     input,
     context,
+    requestKey = "summary",
+    status = "Summarizing with on-device AI…",
   }: {
     input: BrowserAiSummaryInput;
     context?: string;
+    requestKey?: BrowserAiRequestKey;
+    status?: string;
   }): Promise<string | null> => {
-    const request = ++activeRequest;
-    activeController?.abort();
+    const request = (activeRequests.get(requestKey) ?? 0) + 1;
+    activeRequests.set(requestKey, request);
+    activeControllers.get(requestKey)?.abort();
     const controller = new AbortController();
-    activeController = controller;
-    const session = await ensureSession(input.length);
-    if (!session || request !== activeRequest) {
-      if (request === activeRequest) {
-        activeController = null;
-        options.setStatus("");
+    activeControllers.set(requestKey, controller);
+    const statusToken = Symbol(`browser-ai:${requestKey}:${request}`);
+    const session = await ensureSession(input.length, requestKey, statusToken);
+    if (!session || request !== activeRequests.get(requestKey)) {
+      if (request === activeRequests.get(requestKey)) {
+        activeControllers.delete(requestKey);
+        clearOwnedStatus(statusToken);
       }
       return null;
     }
 
-    options.setStatus("Summarizing with on-device AI…");
+    setOwnedStatus(requestKey, statusToken, status);
     logExtensionEvent({
       event: "browser-ai:summarize-start",
       level: "verbose",
       scope: "sidepanel",
-      detail: { chars: input.text.length, length: input.length },
+      detail: { chars: input.text.length, length: input.length, requestKey },
     });
     try {
       const result = await summarizeRecursively({
@@ -310,12 +347,17 @@ export function createBrowserAiSummaryRuntime(options: RuntimeOptions) {
         signal: controller.signal,
         depth: 0,
       });
-      const summary = request === activeRequest && result.trim() ? result.trim() : null;
+      const summary =
+        request === activeRequests.get(requestKey) && result.trim() ? result.trim() : null;
       logExtensionEvent({
         event: summary ? "browser-ai:summarize-done" : "browser-ai:summarize-discarded",
         level: summary ? "verbose" : "warn",
         scope: "sidepanel",
-        detail: { chars: input.text.length, resultChars: result.trim().length },
+        detail: {
+          chars: input.text.length,
+          requestKey,
+          resultChars: result.trim().length,
+        },
       });
       return summary;
     } catch (error) {
@@ -327,14 +369,15 @@ export function createBrowserAiSummaryRuntime(options: RuntimeOptions) {
           aborted: controller.signal.aborted,
           chars: input.text.length,
           length: input.length,
+          requestKey,
           ...errorDetail(error),
         },
       });
       return null;
     } finally {
-      if (request === activeRequest) {
-        activeController = null;
-        options.setStatus("");
+      if (request === activeRequests.get(requestKey)) {
+        activeControllers.delete(requestKey);
+        clearOwnedStatus(statusToken);
       }
     }
   };
