@@ -2,6 +2,10 @@
 
 ## 0.20.1 - Unreleased
 
+### Fixes
+
+- LLM summaries: retry transient API and pre-output streaming failures such as HTTP 502 instead of failing immediately.
+
 ## 0.20.0 - 2026-06-19
 
 ### Features
@@ -61,7 +65,6 @@
 - Development CLI: load core workspace TypeScript sources directly for `pnpm summarize` and `pnpm s`, avoiding stale exports and concurrent rebuild races.
 - Network safety: block private IPv4 targets embedded in the IPv4-translatable IPv6 prefix.
 - Slides: ignore invalid zero-index slide markers without hanging while extracting slide references.
-- LLM summaries: retry transient API and pre-output streaming failures such as HTTP 502 instead of failing immediately.
 - Summary length: use `long` as the built-in default across the CLI, daemon, and Chrome extension; explicit and configured lengths remain unchanged.
 - YouTube captions: ignore WebVTT header metadata, cue identifiers, comments, styles, and regions when building transcripts.
 
