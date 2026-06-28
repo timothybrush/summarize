@@ -40,7 +40,8 @@ Example Linux managed policy at `/etc/opt/chrome/policies/managed/summarize.json
   "ExtensionSettings": {
     "cejgnmmhbbpdmjnfppjdfkocebngehfg": {
       "installation_mode": "allowed",
-      "blocked_permissions": ["nativeMessaging"]
+      "blocked_permissions": ["nativeMessaging"],
+      "runtime_blocked_hosts": ["http://localhost", "http://127.0.0.1", "http://[::1]"]
     }
   },
   "NativeMessagingBlocklist": ["com.steipete.summarize"],
@@ -59,6 +60,13 @@ Example Linux managed policy at `/etc/opt/chrome/policies/managed/summarize.json
 from acquiring or retaining `nativeMessaging`. `NativeMessagingBlocklist` prevents Chrome from
 launching the named host even for another extension. `NativeMessagingUserLevelHosts=false` allows
 only administrator-installed system hosts; it is not a complete block on its own.
+
+`runtime_blocked_hosts` is an independent browser-enforced guard against local HTTP. The production
+manifest has no `127.0.0.1` permission, but retains `http://localhost/*` for the optional Direct
+Ollama provider and local-page Browser workflows. The exact-ID policy above blocks this extension
+from interacting with localhost, IPv4 loopback, or IPv6 loopback on any port. Cloud Direct providers
+and Browser mode on ordinary sites continue to work. Chrome policy host patterns omit the path;
+adding `/*` here is not valid for this policy.
 
 To disable every native messaging host, use `"NativeMessagingBlocklist": ["*"]`. If the company
 needs selected hosts, combine the wildcard block with `NativeMessagingAllowlist` entries. To
@@ -100,6 +108,7 @@ and confirm:
 - Daemon controls are disabled and no permission prompt appears.
 - Chrome rejects `nativeMessaging` for extension ID `cejgnmmhbbpdmjnfppjdfkocebngehfg`.
 - Chrome refuses to launch `com.steipete.summarize` when its host block applies.
+- Chrome blocks the extension from local HTTP origins when `runtime_blocked_hosts` applies.
 
 `daemonAllowed=false` is UX and fail-closed application behavior, not a substitute for the Chrome
 policies. The service worker checks managed policy and current permission again immediately before
