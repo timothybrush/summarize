@@ -847,6 +847,7 @@ pnpm check
 
 ## More
 
+- Canonical agent skill: [`.agents/skills/summarize/SKILL.md`](.agents/skills/summarize/SKILL.md). Summarize-specific CLI guidance lives here; downstream integrations should link to this source and keep only integration-specific notes.
 - Docs index: [docs/README.md](docs/README.md)
 - CLI providers and config: [docs/cli.md](docs/cli.md)
 - Auto model rules: [docs/model-auto.md](docs/model-auto.md)

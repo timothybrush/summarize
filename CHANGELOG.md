@@ -2,6 +2,10 @@
 
 ## 0.20.2 - Unreleased
 
+### Features
+
+- Agent workflows: add the canonical repository-owned Summarize skill for URLs, files, media, extraction, and structured JSON usage (#319, thanks @coygeek).
+
 ### Fixes
 
 - Anthropic custom gateways: preserve path prefixes when sending PDF document requests (#325, thanks @wangwllu).
