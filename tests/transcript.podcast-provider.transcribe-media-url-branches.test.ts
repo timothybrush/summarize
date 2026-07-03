@@ -118,9 +118,13 @@ describe("podcast provider - transcribeMediaUrl branch coverage", () => {
       if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
         return new Response(null, {
           status: 200,
-          headers: { "content-type": "audio/mpeg", "content-length": "3" },
+          headers: {
+            "content-type": "audio/mpeg",
+            "content-length": String(30 * 1024 * 1024),
+          },
         });
       }
+      expect(init?.headers).toBeUndefined();
       return new Response(new Uint8Array([1, 2, 3]), {
         status: 200,
         headers: { "content-type": "audio/mpeg" },
@@ -150,6 +154,7 @@ describe("podcast provider - transcribeMediaUrl branch coverage", () => {
       expect(result.source).toBe("whisper");
       expect(result.text).toBe("Deepgram podcast transcript");
       expect(result.metadata?.transcriptionProvider).toBe("deepgram");
+      expect(String(result.notes)).not.toContain("ffmpeg not available");
     } finally {
       vi.unstubAllGlobals();
       vi.doUnmock("node:child_process");

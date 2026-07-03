@@ -122,8 +122,12 @@ export async function transcribeMediaUrl({
     mediaKind: "audio",
     totalBytes,
   });
+  const shouldUseDeepgramFileUpload =
+    Boolean(effectiveTranscription.deepgramApiKey) &&
+    (head.contentLength === null || head.contentLength > MAX_OPENAI_UPLOAD_BYTES);
   const shouldTranscribeInMemory =
-    !canChunk || (head.contentLength !== null && head.contentLength <= MAX_OPENAI_UPLOAD_BYTES);
+    !shouldUseDeepgramFileUpload &&
+    (!canChunk || (head.contentLength !== null && head.contentLength <= MAX_OPENAI_UPLOAD_BYTES));
   if (shouldTranscribeInMemory) {
     const bytes = await downloadCappedMediaBytes(fetchImpl, url, remoteMediaMaxBytes, totalBytes, {
       onProgress: (downloadedBytes) =>

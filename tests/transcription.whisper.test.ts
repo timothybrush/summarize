@@ -546,6 +546,47 @@ describe("transcription/whisper", () => {
     }
   });
 
+  it("falls back from oversized OpenAI files to Deepgram without truncating", async () => {
+    const whisper = await importWhisperWithNoFfmpeg();
+    const dir = await mkdtemp(join(tmpdir(), "summarize-whisper-deepgram-large-"));
+    const path = join(dir, "input.mp3");
+    await writeFile(path, new Uint8Array([1, 2, 3]));
+    await truncate(path, whisper.MAX_OPENAI_UPLOAD_BYTES + 1);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new URL(input.toString()).hostname).toBe("api.deepgram.com");
+      expect((init?.body as Blob).size).toBe(whisper.MAX_OPENAI_UPLOAD_BYTES + 1);
+      return Response.json({
+        results: {
+          channels: [{ alternatives: [{ transcript: "full Deepgram fallback" }] }],
+          utterances: [],
+        },
+      });
+    });
+
+    try {
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await whisper.transcribeMediaFileWithWhisper({
+        filePath: path,
+        mediaType: "audio/mpeg",
+        filename: "input.mp3",
+        groqApiKey: null,
+        openaiApiKey: "OPENAI",
+        falApiKey: null,
+        deepgramApiKey: "DG",
+      });
+
+      expect(result.text).toBe("full Deepgram fallback");
+      expect(result.provider).toBe("deepgram");
+      expect(result.notes.join(" ")).toContain("without truncating the media");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.doUnmock("node:child_process");
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("retries OpenAI decode failures by transcoding via ffmpeg", async () => {
     let call = 0;
     const fetchMock = vi.fn(async () => {

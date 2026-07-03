@@ -294,6 +294,13 @@ export async function transcribeFileWithRemoteFallbacks({
         notes.push(
           `Media too large for Whisper upload (${formatBytes(stat.size)}); install ffmpeg to enable chunked transcription`,
         );
+        const remainingProviders = providerOrder.slice(index + 1);
+        if (remainingProviders.includes("deepgram")) {
+          notes.push(
+            `Falling back to ${formatCloudFallbackTargets(remainingProviders)} without truncating the media`,
+          );
+          continue;
+        }
         const head = await readFirstBytes(filePath, MAX_OPENAI_UPLOAD_BYTES);
         return withMergedNotes(
           await transcribeBytesAcrossProviders({
