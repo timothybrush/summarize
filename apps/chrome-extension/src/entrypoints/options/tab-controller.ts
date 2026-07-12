@@ -1,3 +1,4 @@
+import { getLocalStorage } from "../../lib/local-storage";
 import { isOptionsTab } from "../../lib/options-tabs";
 
 function getRequestedTab(tabIds: Set<string>): string | null {
@@ -41,6 +42,7 @@ export function createOptionsTabs({
   const tabIds = new Set(
     buttons.map((button) => button.dataset.tab).filter((tab): tab is string => Boolean(tab)),
   );
+  const storage = getLocalStorage();
   const requestedTab = getRequestedTab(tabIds);
   let consumedRequestedTab = requestedTab;
 
@@ -59,7 +61,7 @@ export function createOptionsTabs({
     for (const panel of panels) {
       panel.hidden = panel.dataset.tabPanel !== tabId;
     }
-    localStorage.setItem(storageKey, tabId);
+    storage?.setItem(storageKey, tabId);
     if (!options.initial && consumedRequestedTab && tabId !== consumedRequestedTab) {
       clearRequestedTab(tabIds);
       consumedRequestedTab = null;
@@ -69,7 +71,7 @@ export function createOptionsTabs({
     onProcessesActiveChange(tabId === "processes");
   };
 
-  const storedTab = localStorage.getItem(storageKey);
+  const storedTab = storage?.getItem(storageKey) ?? null;
   setActiveTab(requestedTab ?? (storedTab && tabIds.has(storedTab) ? storedTab : "general"), {
     initial: true,
   });
