@@ -70,7 +70,7 @@
     "mime": "^4.1.0",
     "osc-progress": "^0.3.2",
     "tokentally": "^0.1.2",
-    "undici": "8.5.0"
+    "undici": "8.7.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
